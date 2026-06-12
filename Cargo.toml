@@ -1,0 +1,17 @@
+[package]
+name = "blunderchess"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "blunderchess"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+
+[profile.engine-dev]
+inherits = "dev"
+opt-level = 2
+debug = true

@@ -1,0 +1,801 @@
+use crate::types::{Bitboard, CastlingRights, Color, Move, MoveKind, Piece, Square};
+use crate::zobrist;
+use std::fmt;
+
+pub const INITIAL_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+// ---- move buffer ----
+pub const MAX_MOVES: usize = 218;
+
+// ---- undo info for make/unmake ----
+pub struct UndoInfo {
+    mv: Move,
+    captured: Option<(Piece, Color)>,
+    captured_sq: Square,
+    prev_castling: CastlingRights,
+    prev_ep: Option<Square>,
+    prev_halfmove: u8,
+    prev_hash: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attack::init_slider_tables;
+
+    #[test]
+    fn test_make_unmake_roundtrip_startpos() {
+        init_slider_tables();
+        let original = Board::from_initial();
+        let mut moves = [Move::NULL; MAX_MOVES];
+        let count = crate::movegen::generate_legal_moves(&original, &mut moves);
+        assert!(count > 0, "start position should have legal moves");
+
+        for i in 0..count {
+            let mv = moves[i];
+            let saved = original.clone();
+
+            let mut b = original.clone();
+            let _undo = b.make_move(mv);
+
+            let after_hash = b.hash;
+
+            b.unmake_move(&_undo);
+
+            assert_eq!(b.hash, saved.hash, "hash mismatch after unmake for move {mv}");
+            assert_eq!(b.occupancy, saved.occupancy, "occupancy mismatch for move {mv}");
+            assert_eq!(b.pieces_bb, saved.pieces_bb, "pieces_bb mismatch for move {mv}");
+            assert_eq!(b.colors_bb, saved.colors_bb, "colors_bb mismatch for move {mv}");
+            assert_eq!(b.king_square, saved.king_square, "king_square mismatch for move {mv}");
+            assert_eq!(b.castling_rights, saved.castling_rights, "castling_rights mismatch for move {mv}");
+            assert_eq!(b.en_passant, saved.en_passant, "en_passant mismatch for move {mv}");
+            assert_eq!(b.halfmove_clock, saved.halfmove_clock, "halfmove_clock mismatch for move {mv}");
+            assert_eq!(b.fullmove_number, saved.fullmove_number, "fullmove_number mismatch for move {mv}");
+            assert_eq!(b.squares, saved.squares, "squares mismatch for move {mv}");
+            assert_eq!(b.colors, saved.colors, "colors mismatch for move {mv}");
+
+            assert_ne!(after_hash, saved.hash, "hash should change after move {mv}");
+        }
+    }
+
+    #[test]
+    fn test_fen_startpos() {
+        let board = Board::from_initial();
+        assert_eq!(board.piece_at(Square::A1), Some(Piece::Rook));
+        assert_eq!(board.color_at(Square::A1), Some(Color::White));
+        assert_eq!(board.piece_at(Square::E1), Some(Piece::King));
+        assert_eq!(board.piece_at(Square::E8), Some(Piece::King));
+        assert_eq!(board.piece_at(Square::D8), Some(Piece::Queen));
+        assert_eq!(board.color_at(Square::D8), Some(Color::Black));
+        assert_eq!(board.side_to_move, Color::White);
+        assert_eq!(board.castling_rights, CastlingRights::ALL);
+        assert_eq!(board.en_passant, None);
+    }
+
+    #[test]
+    fn test_fen_with_en_passant() {
+        let fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+        let board = Board::from_fen(fen).expect("valid FEN");
+        assert_eq!(board.en_passant, Square::from_file_rank(4, 2)); // e3
+        assert_eq!(board.side_to_move, Color::Black);
+    }
+
+    #[test]
+    fn test_fen_empty_board_no_castling() {
+        let board = Board::from_fen("8/8/8/8/8/8/8/8 w - -").expect("valid");
+        assert_eq!(board.occupancy, 0);
+        assert_eq!(board.castling_rights, CastlingRights::NONE);
+    }
+
+    #[test]
+    fn test_castling_rights_after_king_move() {
+        init_slider_tables();
+        let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid");
+        assert_eq!(board.castling_rights, CastlingRights::ALL);
+
+        let e2 = Square::from_file_rank(4, 1).unwrap();
+        let mv = Move::new(Square::E1, e2);
+        let undo = board.make_move(mv);
+        assert!(!board.castling_rights.white_kingside);
+        assert!(!board.castling_rights.white_queenside);
+        assert!(board.castling_rights.black_kingside);
+        assert!(board.castling_rights.black_queenside);
+
+        board.unmake_move(&undo);
+        assert_eq!(board.castling_rights, CastlingRights::ALL);
+    }
+
+    #[test]
+    fn test_castling_rights_after_a1_rook_move() {
+        init_slider_tables();
+        let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid");
+
+        let a2 = Square::from_file_rank(0, 1).unwrap();
+        let mv = Move::new(Square::A1, a2);
+        let undo = board.make_move(mv);
+        assert!(!board.castling_rights.white_queenside);
+        assert!(board.castling_rights.white_kingside);
+        assert!(board.castling_rights.black_kingside);
+        assert!(board.castling_rights.black_queenside);
+
+        board.unmake_move(&undo);
+        assert_eq!(board.castling_rights, CastlingRights::ALL);
+    }
+
+    #[test]
+    fn test_castling_rights_after_capturing_h8_rook() {
+        init_slider_tables();
+        let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid");
+
+        let mv = Move::capture(Square::H1, Square::H8);
+        let _undo = board.make_move(mv);
+        assert!(!board.castling_rights.black_kingside);
+        assert!(board.castling_rights.black_queenside);
+    }
+
+    #[test]
+    fn test_in_check_startpos() {
+        init_slider_tables();
+        let board = Board::from_initial();
+        assert!(!board.in_check());
+        assert!(board.check_result().is_none());
+    }
+
+    #[test]
+    fn test_checkmate_scholars_mate() {
+        init_slider_tables();
+        let fen = "r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4";
+        let board = Board::from_fen(fen).expect("valid");
+        assert!(board.in_check());
+        match board.check_result() {
+            Some(GameResult::Checkmate(Color::White)) => {}
+            other => panic!("expected Checkmate(White), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_stalemate_black_king_no_moves() {
+        init_slider_tables();
+        let fen = "7k/5Q2/8/8/8/8/8/K7 b - -";
+        let board = Board::from_fen(fen).expect("valid");
+        assert!(!board.in_check(), "king should not be in check");
+        let mut moves = [Move::NULL; MAX_MOVES];
+        let count = crate::movegen::generate_legal_moves(&board, &mut moves);
+        assert_eq!(count, 0, "stalemate: no legal moves");
+        match board.check_result() {
+            Some(GameResult::Stalemate) => {}
+            other => panic!("expected Stalemate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_board_clone_independence() {
+        init_slider_tables();
+        let fen = "r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4";
+        let original = Board::from_fen(fen).expect("valid");
+
+        let a7 = Square::from_file_rank(0, 6).unwrap();
+        let a6 = Square::from_file_rank(0, 5).unwrap();
+
+        let mut clone = original.clone();
+        let mv = Move::new(a7, a6);
+        let _undo = clone.make_move(mv);
+
+        // original unchanged
+        assert_eq!(original.piece_at(a7), Some(Piece::Pawn));
+        assert_eq!(original.color_at(a7), Some(Color::Black));
+        assert_eq!(original.piece_at(a6), None);
+        assert_eq!(original.side_to_move, Color::Black);
+
+        // clone has move applied
+        assert_eq!(clone.piece_at(a7), None);
+        assert_eq!(clone.piece_at(a6), Some(Piece::Pawn));
+        assert_eq!(clone.color_at(a6), Some(Color::Black));
+        assert_eq!(clone.side_to_move, Color::White);
+    }
+
+    #[test]
+    fn test_scholars_mate_c4() {
+        init_slider_tables();
+        let fen = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq -";
+        let board = Board::from_fen(fen).expect("valid FEN");
+        let f7 = Square::from_file_rank(5, 6).unwrap();
+        let attacked = board.is_attacked_by(f7, Color::White);
+        assert!(attacked, "f7 should be attacked by white (queen h5 + bishop c4)");
+        // Qxf7 should be a legal move
+        let mut buf = [Move::NULL; MAX_MOVES];
+        let count = crate::movegen::generate_legal_moves(&board, &mut buf);
+        let found_qxf7 = (0..count).any(|i| {
+            let mv = buf[i];
+            let s = format!("{mv}");
+            if s == "h5f7" {
+                let mut b = board.clone();
+                let _undo = b.make_move(mv);
+                let bk = b.king_square[Color::Black.index()];
+                let in_check = b.is_attacked_by(bk, Color::White);
+                b.unmake_move(&_undo);
+                assert!(in_check, "Black king should be in check after Qxf7#");
+                true
+            } else {
+                false
+            }
+        });
+        assert!(found_qxf7, "Qxf7 should be a legal move");
+    }
+}
+
+// ---- Board struct ----
+#[derive(Clone)]
+pub struct Board {
+    // mailbox (kept for piece-at queries and FEN)
+    pub squares: [Option<Piece>; 64],
+    pub colors: [Option<Color>; 64],
+    pub piece_list: Vec<(Square, Piece, Color)>,
+
+    // bitboards
+    pub pieces_bb: [Bitboard; 6],    // per piece type (both colors)
+    pub colors_bb: [Bitboard; 2],    // per color
+    pub occupancy: Bitboard,
+
+    pub side_to_move: Color,
+    pub castling_rights: CastlingRights,
+    pub en_passant: Option<Square>,
+    pub halfmove_clock: u8,
+    pub fullmove_number: u16,
+    pub hash: u64,
+    pub king_square: [Square; 2],
+    pub history: Vec<u64>,
+}
+
+impl Board {
+    pub fn new() -> Board {
+        Board {
+            squares: [None; 64], colors: [None; 64],
+            piece_list: Vec::with_capacity(32),
+            pieces_bb: [0; 6], colors_bb: [0; 2], occupancy: 0,
+            side_to_move: Color::White,
+            castling_rights: CastlingRights::ALL,
+            en_passant: None, halfmove_clock: 0, fullmove_number: 1,
+            hash: 0,
+            king_square: [Square::E1, Square::E8],
+            history: Vec::new(),
+        }
+    }
+
+    pub fn from_fen(fen: &str) -> Result<Board, String> {
+        let parts: Vec<&str> = fen.split_whitespace().collect();
+        if parts.len() < 4 { return Err("Invalid FEN: need at least 4 fields".to_string()); }
+
+        let mut board = Board::new();
+        board.history = Vec::new();
+
+        let rank_strings: Vec<&str> = parts[0].split('/').collect();
+        if rank_strings.len() != 8 { return Err("Invalid FEN: wrong number of ranks".to_string()); }
+
+        for (rank_idx, rank_str) in rank_strings.iter().enumerate() {
+            let rank = 7 - rank_idx as u8;
+            let mut file: u8 = 0;
+            for ch in rank_str.chars() {
+                if file >= 8 { return Err("Invalid FEN: too many squares in rank".to_string()); }
+                if ch.is_ascii_digit() {
+                    file += ch.to_digit(10).unwrap() as u8;
+                } else {
+                    let color = if ch.is_ascii_uppercase() { Color::White } else { Color::Black };
+                    let piece = match ch.to_ascii_lowercase() {
+                        'p' => Piece::Pawn, 'n' => Piece::Knight, 'b' => Piece::Bishop,
+                        'r' => Piece::Rook, 'q' => Piece::Queen, 'k' => Piece::King,
+                        _ => return Err(format!("Invalid FEN: unknown piece '{ch}'")),
+                    };
+                    let sq = Square::from_file_rank(file, rank).unwrap();
+                    board.place_piece(sq, piece, color);
+                    if piece == Piece::King { board.king_square[color.index()] = sq; }
+                    file += 1;
+                }
+            }
+        }
+
+        board.side_to_move = match parts[1] {
+            "w" => Color::White, "b" => Color::Black,
+            _ => return Err("Invalid FEN: side to move must be 'w' or 'b'".to_string()),
+        };
+
+        board.castling_rights = CastlingRights::NONE;
+        for ch in parts[2].chars() {
+            match ch {
+                'K' => board.castling_rights.white_kingside = true,
+                'Q' => board.castling_rights.white_queenside = true,
+                'k' => board.castling_rights.black_kingside = true,
+                'q' => board.castling_rights.black_queenside = true,
+                '-' => {}
+                _ => return Err(format!("Invalid FEN: unknown castling char '{ch}'")),
+            }
+        }
+
+        board.en_passant = match parts[3] {
+            "-" => None,
+            sq_str if sq_str.len() == 2 => {
+                let file = sq_str.as_bytes()[0].wrapping_sub(b'a');
+                let rank = sq_str.as_bytes()[1].wrapping_sub(b'1');
+                if file < 8 && rank < 8 { Square::from_file_rank(file, rank) }
+                else { return Err(format!("Invalid FEN: bad en passant square '{sq_str}'")); }
+            }
+            _ => return Err("Invalid FEN: bad en passant field".to_string()),
+        };
+
+        if parts.len() >= 5 { board.halfmove_clock = parts[4].parse::<u8>().map_err(|_| "Invalid halfmove clock".to_string())?; }
+        if parts.len() >= 6 { board.fullmove_number = parts[5].parse::<u16>().map_err(|_| "Invalid fullmove number".to_string())?; }
+
+        board.hash = zobrist::compute_initial_hash(&board.squares, &board.colors, board.side_to_move, board.castling_rights, board.en_passant);
+        Ok(board)
+    }
+
+    pub fn from_initial() -> Board { Board::from_fen(INITIAL_FEN).expect("initial FEN should be valid") }
+
+    fn place_piece(&mut self, sq: Square, piece: Piece, color: Color) {
+        let idx = sq.index() as usize;
+        self.squares[idx] = Some(piece);
+        self.colors[idx] = Some(color);
+        self.pieces_bb[piece as usize] |= sq.bit();
+        self.colors_bb[color.index()] |= sq.bit();
+        self.occupancy |= sq.bit();
+        self.piece_list.retain(|&(s, _, _)| s != sq);
+        self.piece_list.push((sq, piece, color));
+    }
+
+    fn remove_piece(&mut self, sq: Square, piece: Piece, color: Color) {
+        let idx = sq.index() as usize;
+        self.squares[idx] = None;
+        self.colors[idx] = None;
+        self.pieces_bb[piece as usize] &= !sq.bit();
+        self.colors_bb[color.index()] &= !sq.bit();
+        self.occupancy &= !sq.bit();
+        self.piece_list.retain(|&(s, p, c)| !(s == sq && p == piece && c == color));
+    }
+
+    fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
+        let fi = from.index() as usize;
+        let ti = to.index() as usize;
+        self.squares[fi] = None;
+        self.colors[fi] = None;
+        self.squares[ti] = Some(piece);
+        self.colors[ti] = Some(color);
+        let from_bit = from.bit();
+        let to_bit = to.bit();
+        self.pieces_bb[piece as usize] = (self.pieces_bb[piece as usize] & !from_bit) | to_bit;
+        self.colors_bb[color.index()] = (self.colors_bb[color.index()] & !from_bit) | to_bit;
+        self.occupancy = (self.occupancy & !from_bit) | to_bit;
+        self.piece_list.retain(|&(s, _, _)| s != from && s != to);
+        self.piece_list.push((to, piece, color));
+    }
+
+    #[inline]
+    pub fn piece_at(&self, sq: Square) -> Option<Piece> { self.squares[sq.index() as usize] }
+
+    #[inline]
+    pub fn color_at(&self, sq: Square) -> Option<Color> { self.colors[sq.index() as usize] }
+
+    #[inline]
+    pub fn empty_square(&self, sq: Square) -> bool { self.squares[sq.index() as usize].is_none() }
+
+    pub fn is_attacked_by(&self, sq: Square, by_color: Color) -> bool {
+        let occ = self.occupancy;
+        let s = sq.index();
+        let enemy = self.colors_bb[by_color.index()];
+        if enemy == 0 { return false; }
+
+        // pawn attacks
+        let pawn_bb = self.pieces_bb[Piece::Pawn as usize] & enemy;
+        if pawn_bb & crate::attack::pawn_attacks(sq, by_color.flip()) != 0 { return true; }
+
+        // knight attacks
+        let knight_bb = self.pieces_bb[Piece::Knight as usize] & enemy;
+        if knight_bb & crate::attack::knight_attacks(sq) != 0 { return true; }
+
+        // king attacks
+        let king_bb = self.pieces_bb[Piece::King as usize] & enemy;
+        if king_bb & crate::attack::king_attacks(sq) != 0 { return true; }
+
+        // sliding pieces
+        let rooks = self.pieces_bb[Piece::Rook as usize] & enemy;
+        let bishops = self.pieces_bb[Piece::Bishop as usize] & enemy;
+        let queens = self.pieces_bb[Piece::Queen as usize] & enemy;
+
+        if rooks & crate::attack::rook_attacks(s, occ) != 0 { return true; }
+        if bishops & crate::attack::bishop_attacks(s, occ) != 0 { return true; }
+        if queens & crate::attack::queen_attacks(s, occ) != 0 { return true; }
+
+        false
+    }
+
+    pub fn in_check(&self) -> bool {
+        self.is_attacked_by(self.king_square[self.side_to_move.index()], self.side_to_move.flip())
+    }
+
+    /// Bitboard of pieces pinned to the given king.
+    /// A piece is pinned if it stands between its king and an enemy slider (rook/bishop/queen).
+    pub fn pinned_pieces(&self, king_color: Color) -> Bitboard {
+        let king_sq = self.king_square[king_color.index()];
+        let friend = self.colors_bb[king_color.index()];
+        let enemy = self.colors_bb[king_color.flip().index()];
+        let enemy_rooks = self.pieces_bb[Piece::Rook as usize] & enemy;
+        let enemy_bishops = self.pieces_bb[Piece::Bishop as usize] & enemy;
+        let enemy_queens = self.pieces_bb[Piece::Queen as usize] & enemy;
+        let has_ortho_sliders = (enemy_rooks | enemy_queens) != 0;
+        let has_diag_sliders = (enemy_bishops | enemy_queens) != 0;
+
+        // Early exit: no enemy sliders → no pins
+        if !has_ortho_sliders && !has_diag_sliders {
+            return 0;
+        }
+
+        let king_file = king_sq.file() as i32;
+        let king_rank = king_sq.rank() as i32;
+
+        let mut pinned = 0u64;
+        let dirs: [(i32, i32); 8] = [
+            (0, 1), (1, 1), (1, 0), (1, -1),
+            (0, -1), (-1, -1), (-1, 0), (-1, 1),
+        ];
+
+        for &(df, dr) in dirs.iter() {
+            let is_ortho = df == 0 || dr == 0;
+            // Skip scan if no relevant sliders for this direction
+            if is_ortho && !has_ortho_sliders { continue; }
+            if !is_ortho && !has_diag_sliders { continue; }
+
+            let mut maybe_pinned: Option<u64> = None;
+            let mut f = king_file + df;
+            let mut r = king_rank + dr;
+
+            while f >= 0 && f < 8 && r >= 0 && r < 8 {
+                let sq_bit = 1u64 << (r * 8 + f);
+                if sq_bit & friend != 0 {
+                    if maybe_pinned.is_some() {
+                        // Two friendly pieces on this ray — no pin
+                        maybe_pinned = None;
+                        break;
+                    }
+                    maybe_pinned = Some(sq_bit);
+                } else if sq_bit & enemy != 0 {
+                    if let Some(pb) = maybe_pinned {
+                        let is_slider = if is_ortho {
+                            sq_bit & (enemy_rooks | enemy_queens) != 0
+                        } else {
+                            sq_bit & (enemy_bishops | enemy_queens) != 0
+                        };
+                        if is_slider {
+                            pinned |= pb;
+                        }
+                    }
+                    break;
+                }
+                f += df;
+                r += dr;
+            }
+        }
+        pinned
+    }
+
+    // ---- make/unmake ----
+    pub fn make_move(&mut self, mv: Move) -> UndoInfo {
+        let from = mv.from();
+        let to = mv.to();
+        let piece = self.piece_at(from).unwrap();
+        let color = self.side_to_move;
+
+        let mut undo = UndoInfo {
+            mv,
+            captured: None,
+            captured_sq: to,
+            prev_castling: self.castling_rights,
+            prev_ep: self.en_passant,
+            prev_halfmove: self.halfmove_clock,
+            prev_hash: self.hash,
+        };
+
+        self.history.push(self.hash);
+        self.hash ^= zobrist::zobrist_piece_square(color, piece, from);
+
+        let captured = self.piece_at(to);
+
+        match mv.kind() {
+            MoveKind::Normal | MoveKind::Promotion => {
+                if let Some(cap_piece) = captured {
+                    let cap_color = self.color_at(to).unwrap();
+                    undo.captured = Some((cap_piece, cap_color));
+                    self.hash ^= zobrist::zobrist_piece_square(cap_color, cap_piece, to);
+                    self.remove_piece(to, cap_piece, cap_color);
+                }
+            }
+            MoveKind::Capture => {
+                if let Some(cap_piece) = captured {
+                    let cap_color = self.color_at(to).unwrap();
+                    undo.captured = Some((cap_piece, cap_color));
+                    undo.captured_sq = to;
+                    self.hash ^= zobrist::zobrist_piece_square(cap_color, cap_piece, to);
+                    self.remove_piece(to, cap_piece, cap_color);
+                } else if let Some(ep) = self.en_passant {
+                    if to == ep && piece == Piece::Pawn {
+                        let cap_rank = from.rank();
+                        let cap_sq = Square::from_file_rank(to.file(), cap_rank).unwrap();
+                        let cap_color = color.flip();
+                        undo.captured = Some((Piece::Pawn, cap_color));
+                        undo.captured_sq = cap_sq;
+                        self.hash ^= zobrist::zobrist_piece_square(cap_color, Piece::Pawn, cap_sq);
+                        self.remove_piece(cap_sq, Piece::Pawn, cap_color);
+                    }
+                }
+            }
+            MoveKind::Castle => {
+                let (rook_from, rook_to) = if to.file() > from.file() {
+                    (Square::from_file_rank(7, from.rank()).unwrap(),
+                     Square::from_file_rank(5, from.rank()).unwrap())
+                } else {
+                    (Square::from_file_rank(0, from.rank()).unwrap(),
+                     Square::from_file_rank(3, from.rank()).unwrap())
+                };
+                self.hash ^= zobrist::zobrist_piece_square(color, Piece::Rook, rook_from);
+                self.hash ^= zobrist::zobrist_piece_square(color, Piece::Rook, rook_to);
+                self.move_piece(rook_from, rook_to, Piece::Rook, color);
+            }
+        }
+
+        self.hash ^= zobrist::zobrist_piece_square(color, piece, to);
+
+        if piece == Piece::Pawn || captured.is_some() || mv.kind() == MoveKind::Capture {
+            self.halfmove_clock = 0;
+        } else {
+            self.halfmove_clock += 1;
+        }
+
+        if color == Color::Black { self.fullmove_number += 1; }
+
+        if mv.kind() == MoveKind::Promotion {
+            let promo = mv.promotion_piece().unwrap_or(Piece::Queen);
+            self.remove_piece(from, piece, color);
+            self.place_piece(to, promo, color);
+        } else {
+            self.move_piece(from, to, piece, color);
+        }
+
+        if let Some(ep) = self.en_passant {
+            self.hash ^= zobrist::zobrist_en_passant(Some(ep.file()));
+        }
+
+        self.en_passant = if mv.kind() == MoveKind::Normal && piece == Piece::Pawn
+            && (from.rank() as i8 - to.rank() as i8).abs() == 2
+        {
+            Some(Square::from_file_rank(from.file(), (from.rank() + to.rank()) / 2).unwrap())
+        } else { None };
+
+        if let Some(ep) = self.en_passant {
+            self.hash ^= zobrist::zobrist_en_passant(Some(ep.file()));
+        }
+
+        let old_castling = self.castling_rights;
+        if piece == Piece::King {
+            if color == Color::White {
+                self.castling_rights.white_kingside = false;
+                self.castling_rights.white_queenside = false;
+            } else {
+                self.castling_rights.black_kingside = false;
+                self.castling_rights.black_queenside = false;
+            }
+            self.king_square[color.index()] = to;
+        }
+        if piece == Piece::Rook {
+            if from == Square::A1 { self.castling_rights.white_queenside = false; }
+            else if from == Square::H1 { self.castling_rights.white_kingside = false; }
+            else if from == Square::A8 { self.castling_rights.black_queenside = false; }
+            else if from == Square::H8 { self.castling_rights.black_kingside = false; }
+        }
+        if captured.is_some() {
+            if to == Square::A1 { self.castling_rights.white_queenside = false; }
+            else if to == Square::H1 { self.castling_rights.white_kingside = false; }
+            else if to == Square::A8 { self.castling_rights.black_queenside = false; }
+            else if to == Square::H8 { self.castling_rights.black_kingside = false; }
+        }
+
+        self.hash ^= zobrist::zobrist_castling(old_castling);
+        self.hash ^= zobrist::zobrist_castling(self.castling_rights);
+        self.hash ^= zobrist::zobrist_side_to_move();
+        self.side_to_move = color.flip();
+
+        undo
+    }
+
+    pub fn unmake_move(&mut self, undo: &UndoInfo) {
+        let mv = undo.mv;
+        let from = mv.from();
+        let to = mv.to();
+        let color = self.side_to_move.flip();
+        let piece = self.piece_at(to).unwrap();
+
+        if mv.kind() == MoveKind::Promotion {
+            let pawn_color = color;
+            self.remove_piece(to, piece, color);
+            self.place_piece(from, Piece::Pawn, pawn_color);
+        } else {
+            self.move_piece(to, from, piece, color);
+        }
+
+        if let Some((cap_piece, cap_color)) = undo.captured {
+            self.place_piece(undo.captured_sq, cap_piece, cap_color);
+        }
+
+        if mv.kind() == MoveKind::Castle {
+            let rook_to = if to.file() > from.file() {
+                Square::from_file_rank(5, from.rank()).unwrap()
+            } else {
+                Square::from_file_rank(3, from.rank()).unwrap()
+            };
+            let rook_from = if to.file() > from.file() {
+                Square::from_file_rank(7, from.rank()).unwrap()
+            } else {
+                Square::from_file_rank(0, from.rank()).unwrap()
+            };
+            self.move_piece(rook_to, rook_from, Piece::Rook, color);
+        }
+
+        if piece == Piece::King {
+            self.king_square[color.index()] = from;
+        }
+
+        self.castling_rights = undo.prev_castling;
+        self.en_passant = undo.prev_ep;
+        self.halfmove_clock = undo.prev_halfmove;
+        self.hash = undo.prev_hash;
+        self.history.pop();
+        self.side_to_move = color;
+        self.fullmove_number = if color == Color::Black { self.fullmove_number - 1 } else { self.fullmove_number };
+    }
+
+    // null move (for null-move pruning in search)
+    pub fn make_null_move(&mut self) -> UndoInfo {
+        let undo = UndoInfo {
+            mv: Move::NULL,
+            captured: None,
+            captured_sq: Square::A1, // dummy
+            prev_castling: self.castling_rights,
+            prev_ep: self.en_passant,
+            prev_halfmove: self.halfmove_clock,
+            prev_hash: self.hash,
+        };
+        self.history.push(self.hash);
+        if let Some(ep) = self.en_passant {
+            self.hash ^= crate::zobrist::zobrist_en_passant(Some(ep.file()));
+        }
+        self.en_passant = None;
+        self.side_to_move = self.side_to_move.flip();
+        self.hash ^= crate::zobrist::zobrist_side_to_move();
+        undo
+    }
+
+    pub fn unmake_null_move(&mut self, undo: &UndoInfo) {
+        self.castling_rights = undo.prev_castling;
+        self.en_passant = undo.prev_ep;
+        self.halfmove_clock = undo.prev_halfmove;
+        self.hash = undo.prev_hash;
+        self.history.pop();
+        self.side_to_move = self.side_to_move.flip();
+    }
+
+    pub fn check_result(&self) -> Option<GameResult> {
+        let mut moves_buf = [Move::NULL; MAX_MOVES];
+        let count = crate::movegen::generate_legal_moves(self, &mut moves_buf);
+        // filter out moves that leave king in check (pseudo-legal → legal)
+        let side = self.side_to_move;
+        let mut legal = 0;
+        let mut b = self.clone();
+        for i in 0..count {
+            let mv = moves_buf[i];
+            let undo = b.make_move(mv);
+            let king = b.king_square[side.index()];
+            if !b.is_attacked_by(king, side.flip()) {
+                legal += 1;
+            }
+            b.unmake_move(&undo);
+        }
+        if legal == 0 {
+            if self.in_check() {
+                Some(GameResult::Checkmate(self.side_to_move.flip()))
+            } else {
+                Some(GameResult::Stalemate)
+            }
+        } else if self.is_draw_by_rule() {
+            Some(GameResult::Draw)
+        } else {
+            None
+        }
+    }
+
+    fn is_draw_by_rule(&self) -> bool {
+        self.is_insufficient_material() || self.is_fifty_move() || self.is_threefold()
+    }
+
+    fn is_insufficient_material(&self) -> bool {
+        let mut pieces: Vec<(Piece, Color)> = Vec::new();
+        for i in 0..64 {
+            if let Some(p) = self.squares[i] {
+                if p != Piece::King {
+                    pieces.push((p, self.colors[i].unwrap()));
+                }
+            }
+        }
+        match pieces.len() {
+            0 => true,
+            1 => { let (p, _) = pieces[0]; p == Piece::Bishop || p == Piece::Knight }
+            2 => {
+                let (p1, c1) = pieces[0]; let (p2, c2) = pieces[1];
+                if c1 != c2 { return false; }
+                p1 == Piece::Bishop && p2 == Piece::Bishop
+                    && self.bishop_square_color(p1, c1) == self.bishop_square_color(p2, c2)
+            }
+            _ => false,
+        }
+    }
+
+    fn bishop_square_color(&self, piece: Piece, color: Color) -> usize {
+        for i in 0..64 {
+            if self.squares[i] == Some(piece) && self.colors[i] == Some(color) {
+                let sq = Square::new(i as u8).unwrap();
+                return ((sq.file() + sq.rank()) % 2) as usize;
+            }
+        }
+        0
+    }
+
+    fn is_fifty_move(&self) -> bool { self.halfmove_clock >= 100 }
+
+    fn is_threefold(&self) -> bool {
+        let mut count = 0u8;
+        for &h in &self.history {
+            if h == self.hash { count += 1; if count >= 2 { return true; } }
+        }
+        false
+    }
+}
+
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for rank in (0..8).rev() {
+            write!(f, "{} |", rank + 1)?;
+            for file in 0..8 {
+                let sq = Square::from_file_rank(file, rank).unwrap();
+                match self.piece_at(sq) {
+                    None => write!(f, " .")?,
+                    Some(piece) => {
+                        let c = match piece {
+                            Piece::Pawn => 'p', Piece::Knight => 'n', Piece::Bishop => 'b',
+                            Piece::Rook => 'r', Piece::Queen => 'q', Piece::King => 'k',
+                        };
+                        let ch = if self.color_at(sq) == Some(Color::White) { c.to_ascii_uppercase() } else { c };
+                        write!(f, " {ch}")?;
+                    }
+                }
+            }
+            writeln!(f)?;
+        }
+        writeln!(f, "   ----------------")?;
+        writeln!(f, "    a b c d e f g h")?;
+        write!(f, "    {} to move", if self.side_to_move == Color::White { "White" } else { "Black" })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameResult {
+    Checkmate(Color),
+    Stalemate,
+    Draw,
+}
+
+impl fmt::Display for GameResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GameResult::Checkmate(winner) => write!(f, "Checkmate! {winner:?} wins"),
+            GameResult::Stalemate => write!(f, "Stalemate! Draw"),
+            GameResult::Draw => write!(f, "Draw"),
+        }
+    }
+}
