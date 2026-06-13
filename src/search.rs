@@ -356,8 +356,9 @@ fn alpha_beta(
 
         let from = mv.from();
 
-        // Trivially legal: non-king, non-ep, non-castle, non-pinned
-        let is_trivially_legal = {
+        // Trivially legal: non-king, non-ep, non-castle, non-pinned, and
+        // only when we're not in check (in check, every move must resolve it)
+        let is_trivially_legal = !board.in_check() && {
             if let Some(piece) = board.piece_at(from) {
                 let is_ep = mv.kind() == MoveKind::Capture
                     && board.en_passant() == Some(mv.to());
@@ -569,6 +570,7 @@ fn order_moves_q(moves: &mut [Move], board: &Board, _state: &SearchState) {
 mod tests {
     use super::*;
     use crate::board::Board;
+    use crate::types::{Color, Square};
 
     fn make_tt() -> Arc<TT> { Arc::new(TT::new(16)) }
 
@@ -748,5 +750,59 @@ mod tests {
         assert!(result.score > -500,
             "Score after capturing queen should be much better than -900, got {}",
             result.score);
+    }
+
+    #[test]
+    fn test_search_hanging_position() {
+        // Position reported as causing engine hang/timeout
+        crate::attack::init_slider_tables();
+        let fen = "r1b1k2r/pp1p1ppp/1qn1pn2/8/1bPN4/2N1P1P1/PPQ2P1P/R1B1KB1R b KQkq - 2 8";
+        let board = Board::from_fen(fen).unwrap();
+        let params = SearchParams::with_depth(4);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let result = search(&board, &params, &stop, &tt);
+        assert!(result.best_move.is_some(), "search should return a move");
+    }
+
+    #[test]
+    fn test_search_hanging_position_movetime() {
+        // Same position with movetime limit — must not hang
+        crate::attack::init_slider_tables();
+        let fen = "r1b1k2r/pp1p1ppp/1qn1pn2/8/1bPN4/2N1P1P1/PPQ2P1P/R1B1KB1R b KQkq - 2 8";
+        let board = Board::from_fen(fen).unwrap();
+        let mut params = SearchParams::new();
+        params.movetime = Some(500);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let start = std::time::Instant::now();
+        let result = search(&board, &params, &stop, &tt);
+        let elapsed = start.elapsed().as_millis();
+        assert!(result.best_move.is_some(), "search should return a move");
+        assert!(elapsed < 5000, "search with 500ms movetime took {elapsed}ms, should stop quickly");
+    }
+
+    #[test]
+    fn test_king_in_check_illegal_move() {
+        // Black king on g6 is in check from white queen on f5.
+        // e1f1 (rook captures rook) does NOT resolve the check → must be illegal.
+        crate::attack::init_slider_tables();
+        let fen = "8/p3r3/1p4k1/3B1Qp1/2P5/6P1/7P/4rRK1 b - - 14 47";
+        let board = Board::from_fen(fen).unwrap();
+        let king = board.king_square(Color::Black);
+        assert!(board.is_attacked_by(king, Color::White), "black king should be in check");
+        let moves = crate::movegen::generate_legal_vec(&board);
+        let e1 = Square::from_file_rank(4, 0).unwrap();
+        let f1 = Square::from_file_rank(5, 0).unwrap();
+        let has_e1f1 = moves.iter().any(|m| m.from() == e1 && m.to() == f1);
+        assert!(!has_e1f1, "e1f1 should be illegal (does not resolve check)");
+        let params = SearchParams::with_depth(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let result = search(&board, &params, &stop, &tt);
+        if let Some(bm) = result.best_move {
+            assert_ne!((bm.from(), bm.to()), (e1, f1),
+                "search picked illegal move e1f1 (does not resolve check)");
+        }
     }
 }

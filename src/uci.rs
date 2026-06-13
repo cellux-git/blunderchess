@@ -239,7 +239,7 @@ impl Engine {
             }
         }
 
-        if params.infinite || params.movetime.is_some() {
+        if params.infinite || self.pondering {
             self.start_async_search(params);
         } else {
             let stop = Arc::new(AtomicBool::new(false));
@@ -254,14 +254,12 @@ impl Engine {
         let board = self.board.clone();
         let tt = self.tt.clone();
         let stop = self.stop_flag.clone();
-        let movetime = params.movetime;
         let pondering = self.pondering;
         let ponderhit = self.ponderhit_received.clone();
 
         let handle = std::thread::spawn(move || {
             let result = crate::search::search(&board, &params, &stop, &tt);
             if pondering && !ponderhit.load(Ordering::SeqCst) {
-                // Ponder search — opponent didn't play predicted move. Discard.
                 return SearchResult {
                     best_move: None, score: 0, depth: 0, pv: Vec::new(),
                     nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
@@ -271,17 +269,6 @@ impl Engine {
         });
 
         self.search_handles.push(handle);
-
-        // Don't set movetime timer when pondering (we wait for ponderhit/stop)
-        if !pondering {
-            if let Some(limit) = movetime {
-                let stop = self.stop_flag.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(limit + 50));
-                    stop.store(true, Ordering::SeqCst);
-                });
-            }
-        }
     }
 
     fn cmd_stop(&mut self) {
