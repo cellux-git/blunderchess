@@ -1,6 +1,6 @@
 # 03 — Better backward pawn detection
 
-**Status**: `ready-for-agent`
+**Status**: `completed`
 
 ## Current state
 

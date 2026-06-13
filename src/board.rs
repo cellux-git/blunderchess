@@ -67,42 +67,42 @@ mod tests {
         assert_eq!(board.piece_at(Square::E8), Some(Piece::King));
         assert_eq!(board.piece_at(Square::D8), Some(Piece::Queen));
         assert_eq!(board.color_at(Square::D8), Some(Color::Black));
-        assert_eq!(board.side_to_move, Color::White);
-        assert_eq!(board.castling_rights, CastlingRights::ALL);
-        assert_eq!(board.en_passant, None);
+        assert_eq!(board.side_to_move(), Color::White);
+        assert_eq!(board.castling_rights(), CastlingRights::ALL);
+        assert_eq!(board.en_passant(), None);
     }
 
     #[test]
     fn test_fen_with_en_passant() {
         let fen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
         let board = Board::from_fen(fen).expect("valid FEN");
-        assert_eq!(board.en_passant, Square::from_file_rank(4, 2)); // e3
-        assert_eq!(board.side_to_move, Color::Black);
+        assert_eq!(board.en_passant(), Square::from_file_rank(4, 2)); // e3
+        assert_eq!(board.side_to_move(), Color::Black);
     }
 
     #[test]
     fn test_fen_empty_board_no_castling() {
         let board = Board::from_fen("8/8/8/8/8/8/8/8 w - -").expect("valid");
-        assert_eq!(board.occupancy, 0);
-        assert_eq!(board.castling_rights, CastlingRights::NONE);
+        assert_eq!(board.occupancy(), 0);
+        assert_eq!(board.castling_rights(), CastlingRights::NONE);
     }
 
     #[test]
     fn test_castling_rights_after_king_move() {
         init_slider_tables();
         let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid");
-        assert_eq!(board.castling_rights, CastlingRights::ALL);
+        assert_eq!(board.castling_rights(), CastlingRights::ALL);
 
         let e2 = Square::from_file_rank(4, 1).unwrap();
         let mv = Move::new(Square::E1, e2);
         let undo = board.make_move(mv);
-        assert!(!board.castling_rights.white_kingside);
-        assert!(!board.castling_rights.white_queenside);
-        assert!(board.castling_rights.black_kingside);
-        assert!(board.castling_rights.black_queenside);
+        assert!(!board.castling_rights().white_kingside);
+        assert!(!board.castling_rights().white_queenside);
+        assert!(board.castling_rights().black_kingside);
+        assert!(board.castling_rights().black_queenside);
 
         board.unmake_move(&undo);
-        assert_eq!(board.castling_rights, CastlingRights::ALL);
+        assert_eq!(board.castling_rights(), CastlingRights::ALL);
     }
 
     #[test]
@@ -113,13 +113,13 @@ mod tests {
         let a2 = Square::from_file_rank(0, 1).unwrap();
         let mv = Move::new(Square::A1, a2);
         let undo = board.make_move(mv);
-        assert!(!board.castling_rights.white_queenside);
-        assert!(board.castling_rights.white_kingside);
-        assert!(board.castling_rights.black_kingside);
-        assert!(board.castling_rights.black_queenside);
+        assert!(!board.castling_rights().white_queenside);
+        assert!(board.castling_rights().white_kingside);
+        assert!(board.castling_rights().black_kingside);
+        assert!(board.castling_rights().black_queenside);
 
         board.unmake_move(&undo);
-        assert_eq!(board.castling_rights, CastlingRights::ALL);
+        assert_eq!(board.castling_rights(), CastlingRights::ALL);
     }
 
     #[test]
@@ -129,8 +129,8 @@ mod tests {
 
         let mv = Move::capture(Square::H1, Square::H8);
         let _undo = board.make_move(mv);
-        assert!(!board.castling_rights.black_kingside);
-        assert!(board.castling_rights.black_queenside);
+        assert!(!board.castling_rights().black_kingside);
+        assert!(board.castling_rights().black_queenside);
     }
 
     #[test]
@@ -185,13 +185,13 @@ mod tests {
         assert_eq!(original.piece_at(a7), Some(Piece::Pawn));
         assert_eq!(original.color_at(a7), Some(Color::Black));
         assert_eq!(original.piece_at(a6), None);
-        assert_eq!(original.side_to_move, Color::Black);
+        assert_eq!(original.side_to_move(), Color::Black);
 
         // clone has move applied
         assert_eq!(clone.piece_at(a7), None);
         assert_eq!(clone.piece_at(a6), Some(Piece::Pawn));
         assert_eq!(clone.color_at(a6), Some(Color::Black));
-        assert_eq!(clone.side_to_move, Color::White);
+        assert_eq!(clone.side_to_move(), Color::White);
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
             if s == "h5f7" {
                 let mut b = board.clone();
                 let _undo = b.make_move(mv);
-                let bk = b.king_square[Color::Black.index()];
+                let bk = b.king_square(Color::Black);
                 let in_check = b.is_attacked_by(bk, Color::White);
                 b.unmake_move(&_undo);
                 assert!(in_check, "Black king should be in check after Qxf7#");
@@ -228,26 +228,42 @@ mod tests {
 #[derive(Clone)]
 pub struct Board {
     // mailbox (kept for piece-at queries and FEN)
-    pub squares: [Option<Piece>; 64],
-    pub colors: [Option<Color>; 64],
-    pub piece_list: Vec<(Square, Piece, Color)>,
+    squares: [Option<Piece>; 64],
+    colors: [Option<Color>; 64],
+    piece_list: Vec<(Square, Piece, Color)>,
 
     // bitboards
-    pub pieces_bb: [Bitboard; 6],    // per piece type (both colors)
-    pub colors_bb: [Bitboard; 2],    // per color
-    pub occupancy: Bitboard,
+    pieces_bb: [Bitboard; 6],    // per piece type (both colors)
+    colors_bb: [Bitboard; 2],    // per color
+    occupancy: Bitboard,
 
-    pub side_to_move: Color,
-    pub castling_rights: CastlingRights,
-    pub en_passant: Option<Square>,
-    pub halfmove_clock: u8,
-    pub fullmove_number: u16,
-    pub hash: u64,
-    pub king_square: [Square; 2],
-    pub history: Vec<u64>,
+    side_to_move: Color,
+    castling_rights: CastlingRights,
+    en_passant: Option<Square>,
+    halfmove_clock: u8,
+    fullmove_number: u16,
+    hash: u64,
+    king_square: [Square; 2],
+    history: Vec<u64>,
 }
 
 impl Board {
+    pub fn squares(&self) -> &[Option<Piece>; 64] { &self.squares }
+    pub fn colors(&self) -> &[Option<Color>; 64] { &self.colors }
+    pub fn piece_list(&self) -> &Vec<(Square, Piece, Color)> { &self.piece_list }
+    pub fn pieces_bb(&self, piece: Piece) -> Bitboard { self.pieces_bb[piece as usize] }
+    pub fn colors_bb(&self, color: Color) -> Bitboard { self.colors_bb[color.index()] }
+    pub fn occupancy(&self) -> Bitboard { self.occupancy }
+    pub fn side_to_move(&self) -> Color { self.side_to_move }
+    pub fn set_side_to_move(&mut self, stm: Color) { self.side_to_move = stm; }
+    pub fn castling_rights(&self) -> CastlingRights { self.castling_rights }
+    pub fn en_passant(&self) -> Option<Square> { self.en_passant }
+    pub fn halfmove_clock(&self) -> u8 { self.halfmove_clock }
+    pub fn fullmove_number(&self) -> u16 { self.fullmove_number }
+    pub fn hash(&self) -> u64 { self.hash }
+    pub fn king_square(&self, color: Color) -> Square { self.king_square[color.index()] }
+    pub fn history(&self) -> &Vec<u64> { &self.history }
+
     pub fn new() -> Board {
         Board {
             squares: [None; 64], colors: [None; 64],
@@ -413,6 +429,7 @@ impl Board {
 
     /// Bitboard of pieces pinned to the given king.
     /// A piece is pinned if it stands between its king and an enemy slider (rook/bishop/queen).
+    #[allow(unused_assignments)]
     pub fn pinned_pieces(&self, king_color: Color) -> Bitboard {
         let king_sq = self.king_square[king_color.index()];
         let friend = self.colors_bb[king_color.index()];
@@ -452,9 +469,9 @@ impl Board {
                 if sq_bit & friend != 0 {
                     if maybe_pinned.is_some() {
                         // Two friendly pieces on this ray — no pin
-                        maybe_pinned = None;
                         break;
                     }
+                    maybe_pinned = Some(sq_bit);
                     maybe_pinned = Some(sq_bit);
                 } else if sq_bit & enemy != 0 {
                     if let Some(pb) = maybe_pinned {
@@ -778,7 +795,7 @@ impl fmt::Display for Board {
         }
         writeln!(f, "   ----------------")?;
         writeln!(f, "    a b c d e f g h")?;
-        write!(f, "    {} to move", if self.side_to_move == Color::White { "White" } else { "Black" })?;
+        write!(f, "    {} to move", if self.side_to_move() == Color::White { "White" } else { "Black" })?;
         Ok(())
     }
 }

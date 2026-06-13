@@ -388,9 +388,9 @@ mod tests {
         let mut engine = Engine::new();
         assert!(engine.process_command("position startpos"));
         let initial = Board::from_initial();
-        assert_eq!(engine.board.side_to_move, initial.side_to_move);
-        assert_eq!(engine.board.castling_rights, initial.castling_rights);
-        assert_eq!(engine.board.en_passant, initial.en_passant);
+        assert_eq!(engine.board.side_to_move(), initial.side_to_move());
+        assert_eq!(engine.board.castling_rights(), initial.castling_rights());
+        assert_eq!(engine.board.en_passant(), initial.en_passant());
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
     fn test_position_fen_en_passant() {
         let mut engine = Engine::new();
         assert!(engine.process_command("position fen rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"));
-        let ep = engine.board.en_passant;
+        let ep = engine.board.en_passant();
         assert!(ep.is_some(), "En passant should be set");
         assert_eq!(ep.unwrap(), Square::from_file_rank(4, 2).unwrap()); // e3
     }

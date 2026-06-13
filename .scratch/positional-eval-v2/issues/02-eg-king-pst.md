@@ -1,6 +1,6 @@
 # 02 — Endgame king PST (centralization)
 
-**Status**: `ready-for-agent`
+**Status**: `completed`
 
 ## Current state
 

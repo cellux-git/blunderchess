@@ -30,7 +30,7 @@ impl Book {
     }
 
     pub fn probe(&self, board: &Board) -> Option<Move> {
-        let hash = board.hash;
+        let hash = board.hash();
         let count = self.entries.len() / 16;
 
         // Binary search for first matching hash (lower bound)
@@ -119,7 +119,7 @@ fn polyglot_to_move(board: &Board, pg_move: u16) -> Option<Move> {
         return Some(Move::capture(from, to));
     }
     if piece == Piece::Pawn {
-        if board.en_passant == Some(to) {
+        if board.en_passant() == Some(to) {
             return Some(Move::ep(from, to));
         }
     }

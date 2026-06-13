@@ -1,5 +1,5 @@
 use crate::board::{Board, GameResult, MAX_MOVES};
-use crate::eval;
+use crate::eval::Eval;
 use crate::movegen;
 use crate::tt::{NodeType, TT};
 use crate::types::{Color, Move, MoveKind, Piece};
@@ -265,7 +265,7 @@ fn alpha_beta(
 ) -> i32 {
     state.nodes += 1;
 
-    if ply >= MAX_DEPTH - 1 { return eval::evaluate(board); }
+    if ply >= MAX_DEPTH - 1 { return Eval::default().evaluate(board); }
     state.pv_length[ply as usize] = ply as usize;
 
     if state.should_stop() || depth == 0 {
@@ -276,14 +276,14 @@ fn alpha_beta(
         return match result {
             GameResult::Checkmate(winner) => {
                 let sign: i32 = if winner == Color::White { 1 } else { -1 };
-                let color_sign: i32 = if board.side_to_move == Color::White { 1 } else { -1 };
+                let color_sign: i32 = if board.side_to_move() == Color::White { 1 } else { -1 };
                 -(CHECKMATE - ply as i32) * sign * color_sign
             }
             GameResult::Stalemate | GameResult::Draw => 0,
         };
     }
 
-    let hash = board.hash;
+    let hash = board.hash();
     let tt_entry = tt.probe(hash);
     let tt_score = tt_entry.as_ref().map(|e| {
         if e.score.abs() >= CHECKMATE - 100 {
@@ -304,7 +304,7 @@ fn alpha_beta(
     let hash_move = tt_entry.and_then(|e| e.best_move);
 
     let can_null_move = !is_pv && depth >= 3 && ply > 0 && !board.in_check();
-    let has_big_pieces = board.piece_list.iter().any(|&(_, p, _)| p != crate::types::Piece::Pawn && p != crate::types::Piece::King);
+    let has_big_pieces = board.piece_list().iter().any(|&(_, p, _)| p != crate::types::Piece::Pawn && p != crate::types::Piece::King);
 
     if can_null_move && has_big_pieces {
         let r = if depth >= 6 { 4 } else { 3 };
@@ -317,7 +317,7 @@ fn alpha_beta(
         }
     }
 
-    let static_eval = if depth <= 2 { Some(eval::evaluate(board)) } else { None };
+    let static_eval = if depth <= 2 { Some(Eval::default().evaluate(board)) } else { None };
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let mut move_count: usize = 0;
@@ -325,7 +325,7 @@ fn alpha_beta(
     let moves = &mut moves_buf[..move_count];
     order_moves(moves, board, hash_move, ply, state, thread_id);
 
-    let side = board.side_to_move;
+    let side = board.side_to_move();
     let pinned = board.pinned_pieces(side);
     let mut best_move: Option<Move> = None;
     let mut best_score = -(CHECKMATE + 200);
@@ -344,9 +344,9 @@ fn alpha_beta(
 
         // Trivially legal: non-king, non-ep, non-castle, non-pinned
         let is_trivially_legal = {
-            if let Some(piece) = board.squares[from.index() as usize] {
+            if let Some(piece) = board.piece_at(from) {
                 let is_ep = mv.kind() == MoveKind::Capture
-                    && board.en_passant == Some(mv.to());
+                    && board.en_passant() == Some(mv.to());
                 piece != Piece::King
                     && !is_ep
                     && mv.kind() != MoveKind::Castle
@@ -359,8 +359,8 @@ fn alpha_beta(
         let undo = board.make_move(mv);
 
         if !is_trivially_legal {
-            let king_sq = board.king_square[side.index()];
-            if board.is_attacked_by(king_sq, board.side_to_move) {
+            let king_sq = board.king_square(side);
+            if board.is_attacked_by(king_sq, board.side_to_move()) {
                 board.unmake_move(&undo);
                 continue;
             }
@@ -467,7 +467,7 @@ fn order_moves(
         if *mv == hash { return i32::MAX; }
         let k = mv.kind();
         if k == MoveKind::Capture {
-            let see_val = crate::eval::see(board, *mv);
+            let see_val = Eval::default().see(board, *mv);
             return if see_val > 0 { 10_000 + see_val }
             else { 2_000 + see_val }; // SEE <= 0: still search, but low priority
         }
@@ -486,7 +486,7 @@ fn order_moves(
 
 fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut SearchState) -> i32 {
     state.nodes += 1;
-    if state.should_stop() || ply >= MAX_DEPTH - 1 { return eval::evaluate(board); }
+    if state.should_stop() || ply >= MAX_DEPTH - 1 { return Eval::default().evaluate(board); }
 
     if let Some(result) = board.check_result() {
         return match result {
@@ -495,13 +495,13 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
         };
     }
 
-    let stand_pat = eval::evaluate(board);
+    let stand_pat = Eval::default().evaluate(board);
     if stand_pat >= beta { return beta; }
     if stand_pat > alpha { alpha = stand_pat; }
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let move_count = movegen::generate_legal_moves(board, &mut moves_buf);
-    let side = board.side_to_move;
+    let side = board.side_to_move();
     let mut filtered = 0;
     for i in 0..move_count {
         let mv = moves_buf[i];
@@ -509,8 +509,8 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
         if k == MoveKind::Capture || k == MoveKind::Promotion {
             // pre-filter: only captures and promotions
             let undo = board.make_move(mv);
-            let king = board.king_square[side.index()];
-            let ok = !board.is_attacked_by(king, board.side_to_move);
+            let king = board.king_square(side);
+            let ok = !board.is_attacked_by(king, board.side_to_move());
             board.unmake_move(&undo);
             if ok {
                 moves_buf[filtered] = mv;
@@ -524,8 +524,8 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
     for i in 0..filtered {
         let mv = moves_buf[i];
         let undo = board.make_move(mv);
-        let king_sq = board.king_square[side.index()];
-        if board.is_attacked_by(king_sq, board.side_to_move) {
+        let king_sq = board.king_square(side);
+        if board.is_attacked_by(king_sq, board.side_to_move()) {
             board.unmake_move(&undo);
             continue;
         }
@@ -538,10 +538,10 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
     alpha
 }
 
-fn order_moves_q(moves: &mut [Move], board: &Board, state: &SearchState) {
+fn order_moves_q(moves: &mut [Move], board: &Board, _state: &SearchState) {
     moves.sort_by_cached_key(|mv| {
         if mv.kind() == MoveKind::Capture {
-            let see_val = crate::eval::see(board, *mv);
+            let see_val = Eval::default().see(board, *mv);
             if see_val > 0 { 10_000 + see_val }
             else { 2_000 + see_val }
         } else if mv.kind() == MoveKind::Promotion {
@@ -555,7 +555,6 @@ fn order_moves_q(moves: &mut [Move], board: &Board, state: &SearchState) {
 mod tests {
     use super::*;
     use crate::board::Board;
-    use crate::movegen;
 
     fn make_tt() -> Arc<TT> { Arc::new(TT::new(16)) }
 

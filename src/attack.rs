@@ -1,4 +1,6 @@
 use crate::types::{Bitboard, Color, Square};
+use crate::types::Piece;
+use crate::board::Board;
 
 const KNIGHT_ATTACKS: [Bitboard; 64] = precompute_knight_attacks();
 const KING_ATTACKS: [Bitboard; 64] = precompute_king_attacks();
@@ -75,16 +77,24 @@ const fn precompute_pawn_attacks() -> [[Bitboard; 64]; 2] {
     table
 }
 
-// Slider attack tables (computed at startup) — lazy init via Once
-static mut ROOK_TABLE: Vec<Bitboard> = Vec::new();
-static mut BISHOP_TABLE: Vec<Bitboard> = Vec::new();
-static mut ROOK_OFFSETS: [usize; 64] = [0; 64];
-static mut BISHOP_OFFSETS: [usize; 64] = [0; 64];
-static mut BISHOP_MAGICS: [u64; 64] = [0; 64];
-static INIT: std::sync::Once = std::sync::Once::new();
+use std::sync::OnceLock;
+
+struct AttackTables {
+    rook_table: Box<[Bitboard]>,
+    bishop_table: Box<[Bitboard]>,
+    rook_offsets: [usize; 64],
+    bishop_offsets: [usize; 64],
+    bishop_magics: [u64; 64],
+}
+
+static TABLES: OnceLock<AttackTables> = OnceLock::new();
 
 pub fn init_slider_tables() {
-    INIT.call_once(|| init_slider_tables_inner());
+    TABLES.get_or_init(|| init_slider_tables_inner());
+}
+
+fn tables() -> &'static AttackTables {
+    TABLES.get_or_init(|| init_slider_tables_inner())
 }
 
 // Magic multiplier seeds (well-known)
@@ -107,64 +117,73 @@ const ROOK_MAGICS: [u64; 64] = [
     0x0001000204080011, 0x0001000204000801, 0x0001000082000401, 0x0001FFFAABFAD1A2,
 ];
 
-fn init_slider_tables_inner() {
-    unsafe {
-        let mut rng: u64 = 0x29A1B4C3D5E6F708;
-        for sq in 0..64u8 {
-            let mask = bishop_mask(sq);
-            let bits = mask.count_ones() as usize;
-            if bits == 0 {
-                BISHOP_MAGICS[sq as usize] = 0;
-                continue;
-            }
-            let shift = 64 - bits;
-            BISHOP_MAGICS[sq as usize] = find_magic(&mut rng, sq, mask, bits, shift);
+fn init_slider_tables_inner() -> AttackTables {
+    let mut rng: u64 = 0x29A1B4C3D5E6F708;
+    let mut bishop_magics = [0u64; 64];
+    for sq in 0..64u8 {
+        let mask = bishop_mask(sq);
+        let bits = mask.count_ones() as usize;
+        if bits == 0 {
+            bishop_magics[sq as usize] = 0;
+            continue;
         }
+        let shift = 64 - bits;
+        bishop_magics[sq as usize] = find_magic(&mut rng, sq, mask, bits, shift);
+    }
 
-        let rook_total: usize = (0..64).map(|s| 1usize << (64 - ROOK_SHIFTS[s] as usize)).sum();
-        let bishop_total: usize = (0..64).map(|s| 1usize << (64 - BISHOP_SHIFTS[s] as usize)).sum();
-        ROOK_TABLE = vec![0; rook_total];
-        BISHOP_TABLE = vec![0; bishop_total];
-        let mut rook_offset = 0;
-        let mut bishop_offset = 0;
-        for sq in 0..64 {
-            ROOK_OFFSETS[sq] = rook_offset;
-            let rshift = ROOK_SHIFTS[sq] as usize;
-            rook_offset += 1usize << (64 - rshift);
+    let rook_total: usize = (0..64).map(|s| 1usize << (64 - ROOK_SHIFTS[s] as usize)).sum();
+    let bishop_total: usize = (0..64).map(|s| 1usize << (64 - BISHOP_SHIFTS[s] as usize)).sum();
+    let mut rook_table = vec![0u64; rook_total];
+    let mut bishop_table = vec![0u64; bishop_total];
+    let mut rook_offsets = [0usize; 64];
+    let mut bishop_offsets = [0usize; 64];
+    let mut rook_offset = 0;
+    let mut bishop_offset = 0;
+    for sq in 0..64 {
+        rook_offsets[sq] = rook_offset;
+        let rshift = ROOK_SHIFTS[sq] as usize;
+        rook_offset += 1usize << (64 - rshift);
 
-            BISHOP_OFFSETS[sq] = bishop_offset;
-            let bshift = BISHOP_SHIFTS[sq] as usize;
-            bishop_offset += 1usize << (64 - bshift);
+        bishop_offsets[sq] = bishop_offset;
+        let bshift = BISHOP_SHIFTS[sq] as usize;
+        bishop_offset += 1usize << (64 - bshift);
+    }
+    // Fill rook table
+    for sq in 0..64u8 {
+        let mask = rook_mask(sq);
+        let magic = ROOK_MAGICS[sq as usize];
+        let shift = ROOK_SHIFTS[sq as usize] as usize;
+        let offset = rook_offsets[sq as usize];
+        let n = 1u64 << mask.count_ones();
+        for i in 0..n {
+            let blockers = index_to_blockers(i, mask);
+            let attacks = rook_attacks_slow(sq, blockers);
+            let idx = offset + ((blockers.wrapping_mul(magic)) >> shift) as usize;
+            rook_table[idx] = attacks;
         }
-        // Fill rook table
-        for sq in 0..64u8 {
-            let mask = rook_mask(sq);
-            let magic = ROOK_MAGICS[sq as usize];
-            let shift = ROOK_SHIFTS[sq as usize] as usize;
-            let offset = ROOK_OFFSETS[sq as usize];
-            let n = 1u64 << mask.count_ones();
-            for i in 0..n {
-                let blockers = index_to_blockers(i, mask);
-                let attacks = rook_attacks_slow(sq, blockers);
-                let idx = offset + ((blockers.wrapping_mul(magic)) >> shift) as usize;
-                ROOK_TABLE[idx] = attacks;
-            }
-        }
+    }
 
-        // Fill bishop table
-        for sq in 0..64u8 {
-            let mask = bishop_mask(sq);
-            let magic = BISHOP_MAGICS[sq as usize];
-            let shift = BISHOP_SHIFTS[sq as usize] as usize;
-            let offset = BISHOP_OFFSETS[sq as usize];
-            let n = 1u64 << mask.count_ones();
-            for i in 0..n {
-                let blockers = index_to_blockers(i, mask);
-                let attacks = bishop_attacks_slow(sq, blockers);
-                let idx = offset + ((blockers.wrapping_mul(magic)) >> shift) as usize;
-                BISHOP_TABLE[idx] = attacks;
-            }
+    // Fill bishop table
+    for sq in 0..64u8 {
+        let mask = bishop_mask(sq);
+        let magic = bishop_magics[sq as usize];
+        let shift = BISHOP_SHIFTS[sq as usize] as usize;
+        let offset = bishop_offsets[sq as usize];
+        let n = 1u64 << mask.count_ones();
+        for i in 0..n {
+            let blockers = index_to_blockers(i, mask);
+            let attacks = bishop_attacks_slow(sq, blockers);
+            let idx = offset + ((blockers.wrapping_mul(magic)) >> shift) as usize;
+            bishop_table[idx] = attacks;
         }
+    }
+
+    AttackTables {
+        rook_table: rook_table.into_boxed_slice(),
+        bishop_table: bishop_table.into_boxed_slice(),
+        rook_offsets,
+        bishop_offsets,
+        bishop_magics,
     }
 }
 
@@ -330,26 +349,22 @@ fn bishop_attacks_slow(sq: u8, blockers: u64) -> u64 {
 
 #[inline]
 pub fn rook_attacks(sq: u8, occ: u64) -> u64 {
-    init_slider_tables();
-    unsafe {
-        let mask = rook_mask(sq);
-        let magic = ROOK_MAGICS[sq as usize];
-        let shift = ROOK_SHIFTS[sq as usize];
-        let idx = ROOK_OFFSETS[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;
-        ROOK_TABLE[idx]
-    }
+    let t = tables();
+    let mask = rook_mask(sq);
+    let magic = ROOK_MAGICS[sq as usize];
+    let shift = ROOK_SHIFTS[sq as usize];
+    let idx = t.rook_offsets[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;
+    t.rook_table[idx]
 }
 
 #[inline]
 pub fn bishop_attacks(sq: u8, occ: u64) -> u64 {
-    init_slider_tables();
-    unsafe {
-        let mask = bishop_mask(sq);
-        let magic = BISHOP_MAGICS[sq as usize];
-        let shift = BISHOP_SHIFTS[sq as usize];
-        let idx = BISHOP_OFFSETS[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;
-        BISHOP_TABLE[idx]
-    }
+    let t = tables();
+    let mask = bishop_mask(sq);
+    let magic = t.bishop_magics[sq as usize];
+    let shift = BISHOP_SHIFTS[sq as usize];
+    let idx = t.bishop_offsets[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;
+    t.bishop_table[idx]
 }
 
 #[inline]
@@ -366,6 +381,76 @@ pub fn king_attacks(sq: Square) -> Bitboard { KING_ATTACKS[sq.index() as usize] 
 #[inline]
 pub fn pawn_attacks(sq: Square, color: Color) -> Bitboard {
     PAWN_ATTACKS[color.index()][sq.index() as usize]
+}
+
+// ---- file / rank helpers ----
+
+const FILE_A: u64 = 0x0101010101010101;
+
+pub fn file_mask(file: u8) -> u64 {
+    FILE_A << file
+}
+
+pub fn adjacent_files_mask(file: u8) -> u64 {
+    let mut mask: u64 = 0;
+    if file > 0 { mask |= file_mask(file - 1); }
+    mask |= file_mask(file);
+    if file < 7 { mask |= file_mask(file + 1); }
+    mask
+}
+
+pub fn rank_mask_forward(sq: Square, color: Color) -> u64 {
+    let rank = sq.rank();
+    if color == Color::White {
+        let mut m: u64 = 0;
+        for r in (rank + 1)..8 { m |= 0xFFu64 << (r * 8); }
+        m
+    } else {
+        let mut m: u64 = 0;
+        for r in 0..rank { m |= 0xFFu64 << (r * 8); }
+        m
+    }
+}
+
+pub fn king_distance(a: Square, b: Square) -> u8 {
+    let df = (a.file() as i32 - b.file() as i32).unsigned_abs() as u8;
+    let dr = (a.rank() as i32 - b.rank() as i32).unsigned_abs() as u8;
+    df.max(dr)
+}
+
+pub fn attackers_to(board: &Board, sq: Square, occ: u64) -> u64 {
+    let si = sq.index();
+    let knights = board.pieces_bb(Piece::Knight) & knight_attacks(sq);
+    let kings = board.pieces_bb(Piece::King) & king_attacks(sq);
+    let pawns_w = board.pieces_bb(Piece::Pawn)
+        & board.colors_bb(Color::White)
+        & pawn_attacks(sq, Color::Black);
+    let pawns_b = board.pieces_bb(Piece::Pawn)
+        & board.colors_bb(Color::Black)
+        & pawn_attacks(sq, Color::White);
+    let rooks = (board.pieces_bb(Piece::Rook) | board.pieces_bb(Piece::Queen))
+        & rook_attacks(si, occ);
+    let bishops = (board.pieces_bb(Piece::Bishop) | board.pieces_bb(Piece::Queen))
+        & bishop_attacks(si, occ);
+    (knights | kings | pawns_w | pawns_b | rooks | bishops) & occ
+}
+
+pub fn smallest_attacker(board: &Board, sq: Square, side: Color, occ: u64) -> Option<(Square, Piece)> {
+    let attackers = attackers_to(board, sq, occ) & board.colors_bb(side);
+    if attackers == 0 { return None; }
+    let p = attackers & board.pieces_bb(Piece::Pawn);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::Pawn)); }
+    let p = attackers & board.pieces_bb(Piece::Knight);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::Knight)); }
+    let p = attackers & board.pieces_bb(Piece::Bishop);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::Bishop)); }
+    let p = attackers & board.pieces_bb(Piece::Rook);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::Rook)); }
+    let p = attackers & board.pieces_bb(Piece::Queen);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::Queen)); }
+    let p = attackers & board.pieces_bb(Piece::King);
+    if p != 0 { let lsb = p.trailing_zeros() as u8; return Some((Square::new(lsb).unwrap(), Piece::King)); }
+    None
 }
 
 #[cfg(test)]
@@ -408,9 +493,10 @@ mod tests {
             total_errors += errors;
             if errors > 0 {
                 use std::collections::HashMap;
-                let magic = unsafe { BISHOP_MAGICS[sq as usize] };
+                let t = tables();
+                let magic = t.bishop_magics[sq as usize];
                 let shift = BISHOP_SHIFTS[sq as usize] as usize;
-                let offset = unsafe { BISHOP_OFFSETS[sq as usize] };
+                let offset = t.bishop_offsets[sq as usize];
                 let mut seen: HashMap<usize, u64> = HashMap::new();
                 let mut collisions = 0;
                 for i in 0..n {

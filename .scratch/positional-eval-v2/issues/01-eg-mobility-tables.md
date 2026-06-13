@@ -1,6 +1,6 @@
 # 01 — Add endgame mobility tables
 
-**Status**: `ready-for-agent`
+**Status**: `completed`
 
 ## Current state
 

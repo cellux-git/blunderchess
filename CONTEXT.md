@@ -28,7 +28,39 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 
 **Zobrist hash**: A 64-bit hash of a board position, computed by XORing pre-generated random keys for each (piece, color, square) combination, plus side-to-move, castling rights, and en passant file. Updated incrementally during make_move. Generated at compile time via a const-fn LCG.
 
-**Piece-Square Table (PST)**: A static 64-square bonus/malus per piece type. Uses PeSTO's published tables with tapered evaluation (midgame/endgame blending based on material phase).
+**Piece-Square Table (PST)**: A static 64-square bonus/malus per piece type. Uses PeSTO's published tables with tapered evaluation (midgame/endgame blending based on material phase). EG king table uses a centralized pattern rewarding king centralization in endgames.
+
+**Mobility**: The number of safe squares a piece can move to. Evaluated via logarithmic tables (diminishing returns per additional square) with separate MG and EG tables. All pieces count enemy-occupied squares as mobile.
+
+**Bad bishop**: A bishop blocked behind its own same-color pawn chain, with low mobility. Penalized per blocking pawn, with extra penalty if the blocking pawn is fixed (cannot advance). Distinct from "trapped bishop" (old term, now subsumed).
+
+**Closed file rook**: A rook on a file where a friendly pawn exists, giving the rook no vertical scope. Penalized.
+
+**7th-rank rook**: A rook on the opponent's second rank (rank 7 for white, rank 2 for black), attacking the opponent's pawn structure. Bonused.
+
+**Rook-queen battery**: Queen and rook aligned on the same file or rank, with bonus scaled by line openness (open > semi-open > closed-movable).
+
+**Queen multi-attack**: Queen attacking multiple enemy pieces simultaneously. Two components: per-piece attack count bonus and fork detection (attacking 2+ undefended pieces).
+
+**Knight passivity**: Penalty for knights on the rim (a/h-file), trapped (zero safe squares), or redundant (two knights defending each other, waived if one is on an outpost).
+
+**Pawn chain**: Two connected defended pawns. A phalanx (side by side on same rank) and a chain (diagonally defended) both receive bonuses.
+
+**Candidate passer**: A pawn that can become passed by capturing one enemy pawn on an adjacent file. Receives a partial passer bonus.
+
+**Passer blocker**: A friendly piece occupying the square directly in front of an enemy passed pawn, blocking its advance. Bonused.
+
+**King opposition**: When the two kings face each other on the same file or rank with exactly one square between them in an endgame with no remaining enemy Q/R/B/N. Bonused when the opponent cannot waste a tempo (has no safe pawn move).
+
+**Space control**: Bonus for own pawns advanced into the opponent's half (ranks 4-6 for white, ranks 3-5 for black).
+
+**Pawn majority**: Bonus for having more pawns than the opponent on a wing (queenside files a-d, kingside files e-h).
+
+**Exchange evaluation**: Positional adjustment when one side is up the exchange (rook vs minor piece). Factors: open files (rook benefit), opponent bishop pair (rook penalty), and minor piece activity (bonus if opponent's minor is passive).
+
+**Backward pawn**: A pawn whose advance square is attacked by an enemy pawn or blocked, with no friendly pawns on adjacent files behind to support its advance. Penalized.
+
+**Tapered evaluation**: Blends midgame (MG) and endgame (EG) scores based on material phase (0-24). MG weighted by phase, EG weighted by (24-phase). Applied at the top level after all per-side evaluation.
 
 **UCI**: Universal Chess Interface — a text protocol over stdin/stdout for communicating with chess GUIs and tools. BlunderChess implements the full UCI specification.
 
@@ -85,7 +117,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 ### Iteration hooks
 
-- **`Eval` struct**: Holds piece values and PST arrays as fields. Construct with defaults (PeSTO) or custom values for tuning.
+- **`Eval` struct**: Holds all tunable evaluation parameters (~60+ fields): material values, PST arrays (MG/EG × 6 pieces), pawn structure weights, mobility tables (logarithmic, MG/EG × 4 pieces), king safety, piece role terms (bad bishop, closed/open-file rook, 7th-rank rook, rook-queen battery, queen multi-attack, knight passivity), passed pawn terms (connected, blocker, candidate, rook-behind, king-proximity MG/EG), king opposition, space control, pawn majority, exchange evaluation, and pawn chain bonuses. Construct with defaults or custom values for tuning.
 - **`SearchParams` struct**: All tunable constants (null-move R, etc.) as fields. Pass by reference.
 - **`Engine` facade**: Wires Board + Eval + Search + TT + UCI. Public entry point for integration tests.
 
@@ -98,7 +130,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | `board.rs` | 14 | Magic tables (exhaustive), make/unmake roundtrip, FEN parsing, castling rights, check/checkmate/stalemate, clone independence |
 | `movegen.rs` | 14 | 6 CPW perft positions (d1-3), pinned pieces, en passant discovery, castling through check, double check, promotion underpromotion, stalemate |
 | `search.rs` | 13 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke |
-| `eval.rs` | 11 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + trapped bishop, rook files, outpost knights, connected passers, rook behind passer, king-passer proximity, mobility, king safety, tapered MG/EG blend |
+| `eval.rs` | 11 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights + rim/trapped/redundancy, connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend |
 | `tt.rs` | 5 | Probe/store roundtrip, misses, depth-preferred replacement, age-based, move pack |
 | `types.rs` | 13 | Move packing (all kinds), Square bounds, Color flip, Move::NULL, CastlingRights |
 | `uci.rs` | 6 | Parse UCI move roundtrip, position startpos/FEN/moves, go depth, invalid input |
@@ -117,7 +149,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 8 | Lock-free TT + huge pages | ✅ DONE | **High** — 2× vs Mutex TT | Selective store skips ~60% of writes |
 | 9 | Aspiration windows | ✅ DONE | **Low** — ~10% speedup | Depth ≥4: narrows root window to prev_score ± 25cp; re-searches with wider bounds on fail-low/high. Neutral at depth ≤10. |
 | 10 | Late move reductions (LMR) | ✅ DONE | **Medium** — reduces nodes at moderate+ depths | Reduces quiet moves 4+, skips killers; neutral at depth≤10 |
-| 11 | Full positional evaluation | ✅ DONE | **High** — quality jump | Pawn structure, king safety (shield + open files + zone attackers), mobility (N/B/R/Q), bishop pair + trapped bishops, rook files, outpost knights, connected passers, rook behind passer, king-passer proximity. Fixed double phase-weighting bug. |
+| 11 | Full positional evaluation | ✅ DONE | **High** — quality jump | 14 evaluation term groups: pawn structure (doubled/isolated/passed/backward/phalanx/chain/candidate), king safety (shield + open files + zone attackers), mobility (logarithmic, MG+EG, 4 piece types), bishop pair + bad bishop (generalized), rook files (+closed, +7th rank, +queen battery), queen multi-attack (+fork), outpost knights (+rim/trapped/redundancy), connected passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), king opposition, space control, pawn majority, exchange evaluation. |
 | 12 | Configurable piece values | ✅ DONE | **Medium** — unlocks tuning | `Eval` struct with 40+ fields: material, PSTs, pawn struct, mobility, king safety; `Eval::default()` returns PeSTO |
 | 13 | Pre-filter legal moves (pin detection) | ✅ DONE | **Medium** — eliminates clone + redundant legality checks | `Board::pinned_pieces()` via ray-scan; search uses `generate_pseudo_legal` (no clone); non-pinned non-king non-ep moves skip make/unmake/is_attacked_by. Modest speedup at current depths; scales with branching factor. |
 | 14 | Workspace split (lib + bin) | ✅ DONE | **Low** — structural | `src/lib.rs` added; integration tests in `tests/` |
@@ -127,7 +159,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 18 | Full bitboard movegen for sliders | ✅ DONE | **Medium** — replace mailbox slider loops | Magic-based bit extraction; ~57 lines removed |
 | 19 | Futility pruning | ✅ DONE | **Medium** — reduces nodes near horizon | Skip quiet moves at depth ≤ 2 when static_eval + margin < alpha. Margins: 200cp@d1, 400cp@d2. |
 | 20 | Static Exchange Evaluation (SEE) | ✅ DONE | **Medium** — better capture ordering | Recursive SEE (smallest attacker first) in `src/eval.rs`. Replaces MVV-LVA in `order_moves`/`order_moves_q`; losing captures (SEE < 0) pruned in quiescence. 5 unit tests. |
-| 21 | Summary + interactive extension of positional eval | ☐ TODO | **Medium** — eval quality | Review current `eval.rs` (tapered, 762 lines: material, PST, pawn struct, king safety, mobility, bishop pair, rook files, outpost knights, passers, trapped bishops) and surface missing terms with user for guided improvement. |
+| 21 | Summary + interactive extension of positional eval | ✅ DONE | **Medium** — eval quality | Reviewed `eval.rs`, added 13 new evaluation term groups across 13 `ready-for-agent` issues. All unit + integration tests pass (86). |
 
 ## Performance (release build, startpos, 1 thread)
 

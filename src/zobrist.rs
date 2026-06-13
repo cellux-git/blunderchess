@@ -114,14 +114,14 @@ mod tests {
     #[test]
     fn test_incremental_hash_matches_full() {
         let board = Board::from_initial();
-        let initial_hash = board.hash;
+        let initial_hash = board.hash();
 
         let full = compute_initial_hash(
-            &board.squares,
-            &board.colors,
-            board.side_to_move,
-            board.castling_rights,
-            board.en_passant,
+            board.squares(),
+            board.colors(),
+            board.side_to_move(),
+            board.castling_rights(),
+            board.en_passant(),
         );
         assert_eq!(initial_hash, full);
 
@@ -130,13 +130,13 @@ mod tests {
             let mut child = board.clone();
             child.make_move(*mv);
             let recomputed = compute_initial_hash(
-                &child.squares,
-                &child.colors,
-                child.side_to_move,
-                child.castling_rights,
-                child.en_passant,
+                child.squares(),
+                child.colors(),
+                child.side_to_move(),
+                child.castling_rights(),
+                child.en_passant(),
             );
-            assert_eq!(child.hash, recomputed, "Hash mismatch after move {mv}");
+            assert_eq!(child.hash(), recomputed, "Hash mismatch after move {mv}");
         }
     }
 
@@ -147,7 +147,7 @@ mod tests {
         for mv in &moves {
             let mut child = board.clone();
             child.make_move(*mv);
-            assert_ne!(child.hash, board.hash, "Hash should change after move {mv}");
+            assert_ne!(child.hash(), board.hash(), "Hash should change after move {mv}");
         }
     }
 
@@ -159,7 +159,7 @@ mod tests {
         let fen_wtm = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e3 0 1";
         let board_wtm = Board::from_fen(fen_wtm).unwrap();
 
-        assert_ne!(board_btm.hash, board_wtm.hash,
+        assert_ne!(board_btm.hash(), board_wtm.hash(),
             "Hash should differ when side to move differs");
     }
 }
