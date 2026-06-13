@@ -42,7 +42,7 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 
 **Queen multi-attack**: Queen attacking multiple enemy pieces simultaneously. Two components: per-piece attack count bonus and fork detection (attacking 2+ undefended pieces).
 
-**Knight passivity**: Penalty for knights on the rim (a/h-file), trapped (zero safe squares), or redundant (two knights defending each other, waived if one is on an outpost).
+**Knight passivity**: Penalty for knights on the rim (a/h-file) or trapped (zero safe squares).
 
 **Pawn chain**: Two connected defended pawns. A phalanx (side by side on same rank) and a chain (diagonally defended) both receive bonuses.
 
@@ -130,7 +130,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | `board.rs` | 14 | Magic tables (exhaustive), make/unmake roundtrip, FEN parsing, castling rights, check/checkmate/stalemate, clone independence |
 | `movegen.rs` | 14 | 6 CPW perft positions (d1-3), pinned pieces, en passant discovery, castling through check, double check, promotion underpromotion, stalemate |
 | `search.rs` | 13 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke |
-| `eval.rs` | 11 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights + rim/trapped/redundancy, connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend |
+| `eval.rs` | 11 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights + rim/trapped, connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend |
 | `tt.rs` | 5 | Probe/store roundtrip, misses, depth-preferred replacement, age-based, move pack |
 | `types.rs` | 13 | Move packing (all kinds), Square bounds, Color flip, Move::NULL, CastlingRights |
 | `uci.rs` | 6 | Parse UCI move roundtrip, position startpos/FEN/moves, go depth, invalid input |
@@ -149,7 +149,7 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 8 | Lock-free TT + huge pages | ✅ DONE | **High** — 2× vs Mutex TT | Selective store skips ~60% of writes |
 | 9 | Aspiration windows | ✅ DONE | **Low** — ~10% speedup | Depth ≥4: narrows root window to prev_score ± 25cp; re-searches with wider bounds on fail-low/high. Neutral at depth ≤10. |
 | 10 | Late move reductions (LMR) | ✅ DONE | **Medium** — reduces nodes at moderate+ depths | Reduces quiet moves 4+, skips killers; neutral at depth≤10 |
-| 11 | Full positional evaluation | ✅ DONE | **High** — quality jump | 14 evaluation term groups: pawn structure (doubled/isolated/passed/backward/phalanx/chain/candidate), king safety (shield + open files + zone attackers), mobility (logarithmic, MG+EG, 4 piece types), bishop pair + bad bishop (generalized), rook files (+closed, +7th rank, +queen battery), queen multi-attack (+fork), outpost knights (+rim/trapped/redundancy), connected passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), king opposition, space control, pawn majority, exchange evaluation. |
+| 11 | Full positional evaluation | ✅ DONE | **High** — quality jump | 14 evaluation term groups: pawn structure (doubled/isolated/passed/backward/phalanx/chain/candidate), king safety (shield + open files + zone attackers), mobility (logarithmic, MG+EG, 4 piece types), bishop pair + bad bishop (generalized), rook files (+closed, +7th rank, +queen battery), queen multi-attack (+fork), outpost knights (+rim/trapped), connected passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), king opposition, space control, pawn majority, exchange evaluation. |
 | 12 | Configurable piece values | ✅ DONE | **Medium** — unlocks tuning | `Eval` struct with 40+ fields: material, PSTs, pawn struct, mobility, king safety; `Eval::default()` returns PeSTO |
 | 13 | Pre-filter legal moves (pin detection) | ✅ DONE | **Medium** — eliminates clone + redundant legality checks | `Board::pinned_pieces()` via ray-scan; search uses `generate_pseudo_legal` (no clone); non-pinned non-king non-ep moves skip make/unmake/is_attacked_by. Modest speedup at current depths; scales with branching factor. |
 | 14 | Workspace split (lib + bin) | ✅ DONE | **Low** — structural | `src/lib.rs` added; integration tests in `tests/` |

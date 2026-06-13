@@ -124,7 +124,6 @@ impl Eval {
         let my_pawns = board.pieces_bb(Piece::Pawn) & board.colors_bb(color);
         let us_bb = board.colors_bb(color);
         let mut knights = my_knights;
-        let mut outpost_knights = 0u64;
         while knights != 0 {
             let sq_idx = knights.trailing_zeros() as u8;
             let sq = Square::new(sq_idx).unwrap();
@@ -140,7 +139,6 @@ impl Eval {
                 if adj & my_pawns != 0 {
                     *mg += self.outpost_knight_bonus.0;
                     *eg += self.outpost_knight_bonus.1;
-                    outpost_knights |= 1u64 << sq_idx;
                 }
             }
 
@@ -154,25 +152,6 @@ impl Eval {
             if safe == 0 {
                 *mg += self.knight_trapped_penalty.0;
                 *eg += self.knight_trapped_penalty.1;
-            }
-        }
-
-        if my_knights.count_ones() >= 2 {
-            let mut k1 = my_knights;
-            while k1 != 0 {
-                let s1 = k1.trailing_zeros() as u8;
-                k1 &= k1 - 1;
-                let sq1 = Square::new(s1).unwrap();
-                let attacks = crate::attack::knight_attacks(sq1);
-                let defending = attacks & my_knights & !(1u64 << s1);
-                if defending != 0 {
-                    let is_outpost = (outpost_knights & (1u64 << s1)) != 0;
-                    let other_is_outpost = (outpost_knights & defending) != 0;
-                    if !is_outpost && !other_is_outpost {
-                        *mg += self.knight_redundancy_penalty.0;
-                        *eg += self.knight_redundancy_penalty.1;
-                    }
-                }
             }
         }
     }
