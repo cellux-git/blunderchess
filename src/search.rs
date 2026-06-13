@@ -48,6 +48,7 @@ struct SearchState {
     stop: *const AtomicBool,
     start_time: Instant,
     movetime: Option<u64>,
+    soft_time: Option<u64>,
     killers: [[Option<Move>; 2]; MAX_DEPTH as usize],
     history: [[i32; 64]; 64],
     excluded_moves: Vec<Move>,
@@ -60,6 +61,14 @@ impl SearchState {
             if self.start_time.elapsed().as_millis() as u64 >= limit { return true; }
         }
         false
+    }
+
+    fn soft_time_exceeded(&self) -> bool {
+        if let Some(soft) = self.soft_time {
+            self.start_time.elapsed().as_millis() as u64 >= soft
+        } else {
+            false
+        }
     }
 }
 
@@ -158,6 +167,7 @@ fn search_worker(
         stop: &**stop,
         start_time: start,
         movetime: params.movetime,
+        soft_time: params.movetime.map(|t| t.saturating_mul(1) / 2),
         killers: [[None; 2]; MAX_DEPTH as usize],
         history: [[0; 64]; 64],
         excluded_moves: Vec::new(),
@@ -220,6 +230,8 @@ fn search_worker(
         }
 
         if state.should_stop() && depth > 1 { break; }
+        // soft time: finish this depth, then stop (unless depth 1 for safety)
+        if depth > 1 && state.soft_time_exceeded() { break; }
 
         if let Some((best_mv, best_score, pv)) = depth_results.first() {
             if *best_mv != Move::NULL {
@@ -333,6 +345,8 @@ fn alpha_beta(
     let mut moves_searched = 0u32;
 
     for i in 0..moves.len() {
+        if state.should_stop() { break; }
+
         let mv = moves[i];
 
         // MultiPV: skip excluded moves at root

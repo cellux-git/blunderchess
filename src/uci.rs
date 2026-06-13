@@ -2,6 +2,7 @@ use crate::board::Board;
 use crate::book::Book;
 use crate::search::{SearchParams, SearchResult};
 use crate::tt::TT;
+use crate::types::Color;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -142,6 +143,11 @@ impl Engine {
         params.multi_pv = self.multi_pv;
         params.ponder = self.pondering;
         let mut i = 0;
+        let mut wtime: Option<u64> = None;
+        let mut btime: Option<u64> = None;
+        let mut winc: Option<u64> = None;
+        let mut binc: Option<u64> = None;
+        let mut movestogo: Option<u8> = None;
         while i < args.len() {
             match args[i] {
                 "depth" => {
@@ -157,6 +163,36 @@ impl Engine {
                         if let Ok(ms) = args[i + 1].parse::<u64>() {
                             params.movetime = Some(ms);
                         }
+                        i += 1;
+                    }
+                }
+                "wtime" => {
+                    if i + 1 < args.len() {
+                        if let Ok(ms) = args[i + 1].parse::<u64>() { wtime = Some(ms); }
+                        i += 1;
+                    }
+                }
+                "btime" => {
+                    if i + 1 < args.len() {
+                        if let Ok(ms) = args[i + 1].parse::<u64>() { btime = Some(ms); }
+                        i += 1;
+                    }
+                }
+                "winc" => {
+                    if i + 1 < args.len() {
+                        if let Ok(ms) = args[i + 1].parse::<u64>() { winc = Some(ms); }
+                        i += 1;
+                    }
+                }
+                "binc" => {
+                    if i + 1 < args.len() {
+                        if let Ok(ms) = args[i + 1].parse::<u64>() { binc = Some(ms); }
+                        i += 1;
+                    }
+                }
+                "movestogo" => {
+                    if i + 1 < args.len() {
+                        if let Ok(n) = args[i + 1].parse::<u8>() { movestogo = Some(n); }
                         i += 1;
                     }
                 }
@@ -176,8 +212,15 @@ impl Engine {
             i += 1;
         }
 
-        if params.depth.is_none() && params.movetime.is_none() && !params.infinite {
-            params.depth = Some(6);
+        // If no explicit movetime/depth, compute from time control
+        if params.movetime.is_none() && params.depth.is_none() && !params.infinite {
+            params.movetime = allocate_time(
+                self.board.side_to_move(),
+                wtime, btime, winc, binc, movestogo,
+            );
+            if params.movetime.is_none() {
+                params.depth = Some(6); // fallback when no time info at all
+            }
         }
 
         if self.pondering {
@@ -363,6 +406,26 @@ pub fn parse_uci_move(board: &Board, s: &str) -> Option<crate::types::Move> {
     None
 }
 
+fn allocate_time(
+    side: Color,
+    wtime: Option<u64>,
+    btime: Option<u64>,
+    winc: Option<u64>,
+    binc: Option<u64>,
+    movestogo: Option<u8>,
+) -> Option<u64> {
+    let (time_left, inc) = match side {
+        Color::White => (wtime?, winc.unwrap_or(0)),
+        Color::Black => (btime?, binc.unwrap_or(0)),
+    };
+    let moves_left = movestogo.unwrap_or(30).max(1) as u64;
+    let base = time_left.saturating_div(moves_left);
+    let allocation = (base + inc).saturating_sub(50); // 50ms safety margin
+    // Hard cap: never use more than 30s or 1/4 of remaining time on one move
+    let cap = (time_left.saturating_div(4)).min(30_000);
+    Some(allocation.clamp(10, cap.max(10)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,11 +486,88 @@ mod tests {
     }
 
     #[test]
+    fn test_go_movetime_from_clock() {
+        // Verify time allocation produces a movetime, and search with it works
+        let mut engine = Engine::new();
+        assert!(engine.process_command("position startpos"));
+        // Fast test: use a tiny clock to get a short movetime
+        let t = allocate_time(
+            engine.board.side_to_move(),
+            Some(1000), Some(1000),  // 1s left
+            Some(0), Some(0),
+            Some(1),  // 1 move to go — uses most of the 1s
+        );
+        assert!(t.is_some(), "should compute a movetime from clock");
+        let ms = t.unwrap();
+        assert!(ms >= 10, "should allocate at least 10ms");
+        assert!(ms <= 250, "with 1s left, cap is 250ms (1/4 of remaining)");
+        let mut params = SearchParams::new();
+        params.movetime = Some(ms);
+        let stop = Arc::new(AtomicBool::new(false));
+        let start = std::time::Instant::now();
+        let result = crate::search::search(&engine.board, &params, &stop, &engine.tt);
+        let elapsed = start.elapsed().as_millis() as u64;
+        assert!(result.best_move.is_some(), "search should return a bestmove");
+        // Search stops between depth iterations, so elapsed can overshoot movetime.
+        // Just verify it didn't run forever.
+        assert!(elapsed < 10_000, "search took {elapsed}ms, should stop within 10s");
+    }
+
+    #[test]
     fn test_parse_uci_invalid_input() {
         let board = Board::from_initial();
         assert!(parse_uci_move(&board, "").is_none());
         assert!(parse_uci_move(&board, "abc").is_none());
         assert!(parse_uci_move(&board, "e2e9").is_none()); // rank 9 invalid
         assert!(parse_uci_move(&board, "i2e4").is_none()); // file i invalid
+    }
+
+    #[test]
+    fn test_allocate_time() {
+        // 5min + 3s inc, 40 movestogo → ~10.5s, capped at 30s
+        let t = allocate_time(Color::White, Some(300_000), None, Some(3_000), None, Some(40));
+        assert!(t.is_some());
+        let t = t.unwrap();
+        assert!(t >= 5_000, "expected at least 5s, got {t}ms");
+        assert!(t <= 30_000, "should not exceed 30s absolute cap, got {t}ms");
+    }
+
+    #[test]
+    fn test_allocate_time_no_data() {
+        // no time info → None
+        let t = allocate_time(Color::White, None, None, None, None, None);
+        assert!(t.is_none());
+    }
+
+    #[test]
+    fn test_allocate_time_black() {
+        // black's clock: 2min + 2s inc, default movestogo=30
+        let t = allocate_time(Color::Black, None, Some(120_000), None, Some(2_000), None);
+        assert!(t.is_some());
+        let t = t.unwrap();
+        assert!(t >= 3_000 && t <= 30_000, "got {t}ms");
+    }
+
+    #[test]
+    fn test_allocate_time_small_remaining() {
+        // 200ms left, 0 inc, default movestogo=30 → minimum 10ms
+        let t = allocate_time(Color::White, Some(200), None, Some(0), None, None);
+        assert!(t.is_some());
+        assert_eq!(t.unwrap(), 10, "should return minimum 10ms");
+    }
+
+    #[test]
+    fn test_allocate_time_cap_at_quarter() {
+        // 2min remaining, movestogo=1 → base=120k, capped at min(30k, 30k) = 30k
+        let t = allocate_time(Color::White, Some(120_000), None, Some(0), None, Some(1));
+        assert!(t.is_some());
+        assert_eq!(t.unwrap(), 30_000);
+    }
+
+    #[test]
+    fn test_allocate_time_wrong_color() {
+        // white to move but only btime provided → None
+        let t = allocate_time(Color::White, None, Some(120_000), None, None, None);
+        assert!(t.is_none(), "white needs wtime, not btime");
     }
 }
