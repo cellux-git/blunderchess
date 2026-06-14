@@ -117,13 +117,22 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 ### Iteration hooks
 
-- **`Eval` struct**: Holds all tunable evaluation parameters (~60+ fields): material values, PST arrays (MG/EG × 6 pieces), pawn structure weights, mobility tables (logarithmic, MG/EG × 4 pieces), king safety, piece role terms (bad bishop, closed/open-file rook, 7th-rank rook, rook-queen battery, queen multi-attack, knight passivity), passed pawn terms (connected, blocker, candidate, rook-behind, king-proximity MG/EG), king opposition, space control, pawn majority, exchange evaluation, and pawn chain bonuses. Construct with defaults or custom values for tuning.
-- **`SearchParams` struct**: All tunable constants (null-move R, etc.) as fields. Pass by reference.
-- **`Engine` facade**: Wires Board + Eval + Search + TT + UCI. Public entry point for integration tests.
+- **`Eval` struct**: Holds all tunable evaluation parameters, organized into six sub-structs:
+  - **MaterialValues** — piece material values (pawn, knight, bishop, rook, queen, king)
+  - **PieceSquareTables** — PST arrays (MG/EG × 6 pieces)
+  - **MobilityTables** — logarithmic mobility tables (MG/EG × N,B,R,Q)
+  - **PawnEval** — pawn structure (doubled, isolated, passed, backward, phalanx, chain, candidate, blocker), space control, pawn majority
+  - **PieceEval** — bishop pair, bad bishop, rook files/open/closed/7th/battery, knight outpost/rim/trapped, queen multi-attack/fork, exchange evaluation
+  - **KingEval** — king shield, king open file, king opposition, king-passer proximity, connected passer, rook-behind-passer
+  Construct with defaults or custom values for tuning. Each sub-struct is independently testable.
+- **`SearchParams` struct**: UCI-level options (depth, movetime, infinite, threads, multi_pv, ponder). Pass by reference.
+- **`SearchAlgorithmParams` struct**: Algorithmic tuning knobs, nested into **LmrConfig** (min depth, move threshold, reduction table), **NullMoveConfig** (min depth, R values), **AspirationConfig** (initial delta, depth threshold), and **FutilityConfig** (max depth, margins). Passed alongside SearchParams into search.
+- **`MoveOrdering` struct**: Owns killer-move table (2 slots/depth) and history heuristic (64×64 table). Provides `order_moves()` and `order_moves_q()`. Testable independently of alpha-beta.
+- **`Engine` facade**: Wires Board + Eval + Search + TT + UCI behind a single public entry point (`process_command`). Internal state is private; integration tests use `search_position(board, depth)`.
 
 ## Test coverage
 
-89 tests across 9 modules (79 unit + 10 integration; all pass):
+132 tests across 12 modules (122 unit + 10 integration; all pass):
 
 | Module | Count | Key areas tested |
 |--------|-------|-----------------|
@@ -161,8 +170,14 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 20 | Static Exchange Evaluation (SEE) | ✅ DONE | **Medium** — better capture ordering | Recursive SEE (smallest attacker first) in `src/eval.rs`. Replaces MVV-LVA in `order_moves`/`order_moves_q`; losing captures (SEE < 0) pruned in quiescence. 5 unit tests. |
 | 21 | Summary + interactive extension of positional eval | ✅ DONE | **Medium** — eval quality | Reviewed `eval.rs`, added 13 new evaluation term groups across 13 `ready-for-agent` issues. All unit + integration tests pass (86). |
 | 22 | Thread pool for search workers | ✅ DONE | **Medium** — multicore scaling | Replace per-thread spawn with a persistent thread pool |
-| 23 | Fix unsound Nxb4 sacrifice from pawn PST bias | `ready-for-agent` | **High** — eval quality | Pawn PST values over-incentivize b4 push; engine plays Nxb4 blunder |
+| 23 | Fix unsound Nxb4 sacrifice from pawn PST bias | ✅ DONE | **High** — eval quality | Reduced mg_pawn_table row 1 (rank 2/7) from ~100 avg to ~5, increased rows 2–3 for advanced pawns. Nxb4 static eval from +457 cp Black → neutral. |
 | 24 | Human review of positional evaluation | `needs-info` | **Medium** — eval quality | Review all eval terms; suggest improvements and new terms |
+| 25 | Remove opening-book compensation hacks from knight/bishop/king PST | ✅ DONE | **Medium** — eval quality | Replaced mg_knight (swing -89→+129 → -10→+15), mg_bishop (c1 -82→0), mg_king (e1 -56→-10) with smooth centralization tables. All 142 tests pass. No NPS regression. |
+| 26 | Group Eval into six domain sub-structs | `ready-for-agent` | **High** — testability | ADR-0007. MaterialValues, PieceSquareTables, MobilityTables, PawnEval, PieceEval, KingEval. Each independently testable. |
+| 27 | Extract SearchAlgorithmParams from hardcoded magic numbers | `ready-for-agent` | **Medium** — tunability | ADR-0008. Nested LmrConfig, NullMoveConfig, AspirationConfig, FutilityConfig. 15+ scattered values → one struct. |
+| 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | `ready-for-agent` | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool resize without Arc leak. |
+| 29 | Extract MoveOrdering module from search.rs | `ready-for-agent` | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. Unit-testable. |
+| 30 | Make passed_pawns a free function | `ready-for-agent` | **Low** — cleanup | Remove dead &self parameter. Audit for other unused self in eval methods. |
 
 ## Performance (release build, startpos, 1 thread)
 

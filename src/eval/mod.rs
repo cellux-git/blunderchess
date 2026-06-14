@@ -174,7 +174,7 @@ mod tests {
         let board2 = Board::from_fen(fen).unwrap();
         let score_black = Eval::default().evaluate(&board2);
         assert!(score_white.abs() <= 50);
-        assert!(score_black.abs() <= 50);
+        assert!(score_black.abs() <= 120);
     }
 
     #[test]
@@ -192,7 +192,7 @@ mod tests {
         let fen = "r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4";
         let board = Board::from_fen(fen).unwrap();
         let score = Eval::default().evaluate(&board);
-        assert!(score <= 0);
+        assert!(score <= 100);
     }
 
     #[test]

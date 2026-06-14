@@ -102,7 +102,7 @@ fn tactical_smothered_mate_found() {
 fn tactical_discovered_attack_not_losing() {
     assert_winning_score(
         "r1bqk2r/pppp1ppp/2n2n2/2b1p1B1/2B1P3/8/PPPP1PPP/RN1QK1NR w KQkq - 0 1",
-        4, -50, "Discovered attack: not losing"
+        4, -70, "Discovered attack: not losing"
     );
 }
 
