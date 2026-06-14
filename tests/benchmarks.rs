@@ -82,9 +82,18 @@ fn tactical_mate_in_two_found() {
 
 #[test]
 fn tactical_smothered_mate_found() {
-    assert_winning_score(
-        "6rk/5Npp/8/8/8/8/8/2K5 b - - 0 1",
-        3, 9000, "Smothered mate: black in checkmate"
+    // Black is already checkmated (smothered mate). The score for the
+    // mated side must be very negative and no legal move exists.
+    let result = search_position(
+        "6rk/5Npp/8/8/8/8/8/2K5 b - - 0 1", 3);
+    assert!(
+        result.score <= -9000,
+        "Smothered mate: black in checkmate: expected score <= -9000, got {}",
+        result.score
+    );
+    assert!(result.best_move.is_none(),
+        "Smothered mate: black in checkmate: expected no legal move, got {:?}",
+        result.best_move.map(|m| format!("{m}"))
     );
 }
 

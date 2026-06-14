@@ -2,7 +2,7 @@ use crate::board::{Board, GameResult, MAX_MOVES};
 use crate::eval::Eval;
 use crate::movegen;
 use crate::tt::{NodeType, TT};
-use crate::types::{Color, Move, MoveKind, Piece};
+use crate::types::{Move, MoveKind, Piece};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -281,16 +281,12 @@ fn alpha_beta(
     state.pv_length[ply as usize] = ply as usize;
 
     if state.should_stop() || depth == 0 {
-        return quiescence(board, alpha, beta, ply, state);
+        return quiescence(board, alpha, beta, ply, 0, state);
     }
 
     if let Some(result) = board.check_result() {
         return match result {
-            GameResult::Checkmate(winner) => {
-                let sign: i32 = if winner == Color::White { 1 } else { -1 };
-                let color_sign: i32 = if board.side_to_move() == Color::White { 1 } else { -1 };
-                -(CHECKMATE - ply as i32) * sign * color_sign
-            }
+            GameResult::Checkmate(_) => -(CHECKMATE - ply as i32),
             GameResult::Stalemate | GameResult::Draw => 0,
         };
     }
@@ -499,7 +495,7 @@ fn order_moves(
     moves.reverse();
 }
 
-fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut SearchState) -> i32 {
+fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState) -> i32 {
     state.nodes += 1;
     if state.should_stop() || ply >= MAX_DEPTH - 1 { return Eval::default().evaluate(board); }
 
@@ -521,13 +517,15 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
     for i in 0..move_count {
         let mv = moves_buf[i];
         let k = mv.kind();
-        if k == MoveKind::Capture || k == MoveKind::Promotion {
-            // pre-filter: only captures and promotions
+        let is_cap_or_promo = k == MoveKind::Capture || k == MoveKind::Promotion;
+        let include = is_cap_or_promo || qs_depth == 0;
+        if include {
             let undo = board.make_move(mv);
             let king = board.king_square(side);
-            let ok = !board.is_attacked_by(king, board.side_to_move());
+            let own_king_safe = !board.is_attacked_by(king, board.side_to_move());
+            let gives_check = board.in_check();
             board.unmake_move(&undo);
-            if ok {
+            if own_king_safe && (is_cap_or_promo || gives_check) {
                 moves_buf[filtered] = mv;
                 filtered += 1;
             }
@@ -544,7 +542,7 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
             board.unmake_move(&undo);
             continue;
         }
-        let score = -quiescence(board, -beta, -alpha, ply + 1, state);
+        let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state);
         board.unmake_move(&undo);
         if score >= beta { return beta; }
         if score > alpha { alpha = score; }
@@ -554,6 +552,7 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, state: &mut
 }
 
 fn order_moves_q(moves: &mut [Move], board: &Board, _state: &SearchState) {
+    let mut b = board.clone();
     moves.sort_by_cached_key(|mv| {
         if mv.kind() == MoveKind::Capture {
             let see_val = Eval::default().see(board, *mv);
@@ -561,7 +560,13 @@ fn order_moves_q(moves: &mut [Move], board: &Board, _state: &SearchState) {
             else { 2_000 + see_val }
         } else if mv.kind() == MoveKind::Promotion {
             30_000
-        } else { 0 }
+        } else {
+            // quiet check: give moderate priority
+            let undo = b.make_move(*mv);
+            let gives_check = b.in_check() as i32;
+            b.unmake_move(&undo);
+            if gives_check > 0 { 5_000 } else { 0 }
+        }
     });
     moves.reverse();
 }
@@ -766,6 +771,105 @@ mod tests {
     }
 
     #[test]
+    fn test_avoid_allowing_mate_in_one() {
+        crate::attack::init_slider_tables();
+        // Regression: engine should see that Re6 allows Qh7# (mate in 1)
+        // and avoid playing it, even at shallow depths.
+        let fen = "5r1k/p1Q5/1p1p3r/6p1/2P1B3/6P1/7P/2R3K1 b - - 2 38";
+        let board = Board::from_fen(fen).unwrap();
+        for depth in 1..=5 {
+            let params = SearchParams::with_depth(depth);
+            let stop = Arc::new(AtomicBool::new(false));
+            let tt = make_tt();
+            let result = search(&board, &params, &stop, &tt);
+            if let Some(bm) = result.best_move {
+                let mv_str = bm.to_string();
+                assert_ne!(
+                    mv_str, "h6e6",
+                    "depth {depth}: engine should not play Re6 (allows Qh7#)"
+                );
+                assert!(
+                    result.score > -(CHECKMATE - 100),
+                    "depth {depth}: score {} indicates engine sees forced mate",
+                    result.score
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_checkmate_score_negative_for_mated_side() {
+        crate::attack::init_slider_tables();
+        // Smothered mate: Black is already checkmated.
+        // The score must be negative (checked with search) and no legal move exists.
+        let fen = "6rk/5Npp/8/8/8/8/8/2K5 b - - 0 1";
+        let board = Board::from_fen(fen).unwrap();
+        let params = SearchParams::with_depth(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let result = search(&board, &params, &stop, &tt);
+        assert!(
+            result.score <= -(CHECKMATE - 50),
+            "Checkmated side must have score <= -MATE; got {}",
+            result.score
+        );
+        assert!(
+            result.best_move.is_none(),
+            "Checkmated side must have no legal move"
+        );
+    }
+
+    #[test]
+    fn test_quiescence_detects_quiet_mate() {
+        crate::attack::init_slider_tables();
+        // White to move, Qh7 is a quiet mate in 1 (not a capture).
+        // Even at depth 1 (which uses QS for the response), the engine must see mate.
+        // Position: after Re6 was played, white can deliver Qh7#.
+        let fen = "5r1k/p1Q5/1p1p4/6p1/2P1B3/4r1P1/7P/2R3K1 w - - 0 39";
+        let board = Board::from_fen(fen).unwrap();
+        let params = SearchParams::with_depth(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let result = search(&board, &params, &stop, &tt);
+        assert!(
+            result.score >= CHECKMATE - 50,
+            "Quiet mate Qh7# must score near +MATE at depth 1; got {} (best={})",
+            result.score,
+            result.best_move.map(|m| m.to_string()).unwrap_or_default()
+        );
+        assert_eq!(
+            result.best_move.map(|m| m.to_string()),
+            Some("c7h7".to_string()),
+            "Best move must be Qh7#"
+        );
+    }
+
+    #[test]
+    fn test_alpha_beta_fallthrough_matches_early_exit() {
+        crate::attack::init_slider_tables();
+        // Verify that a checkmate detected via alpha_beta's early-exit
+        // and via the no-moves fallthrough both return the same score.
+        let fen = "r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4";
+        let board = Board::from_fen(fen).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // Depth 2: early-exit in alpha_beta catches the checkmate
+        let r2 = search(&board, &SearchParams::with_depth(2), &stop, &make_tt());
+        // Depth 1: quiescence catches the checkmate
+        let r1 = search(&board, &SearchParams::with_depth(1), &stop, &make_tt());
+
+        assert!(
+            r1.score <= -(CHECKMATE - 50) && r2.score <= -(CHECKMATE - 50),
+            "Both depth 1 (QS) and depth 2 (early-exit) must score near -MATE; got {} and {}",
+            r1.score, r2.score
+        );
+        assert!(
+            r1.best_move.is_none() && r2.best_move.is_none(),
+            "Checkmated side must have no legal move at any depth"
+        );
+    }
+
+    #[test]
     fn test_search_hanging_position_movetime() {
         // Same position with movetime limit — must not hang
         crate::attack::init_slider_tables();
@@ -806,3 +910,4 @@ mod tests {
         }
     }
 }
+
