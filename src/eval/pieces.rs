@@ -15,20 +15,20 @@ impl Eval {
             let enemy_pawns = enemy_pawns_bb & fm;
             if our_pawns == 0 {
                 if enemy_pawns == 0 {
-                    *mg += self.rook_open_file_bonus.0;
-                    *eg += self.rook_open_file_bonus.1;
+                    *mg += self.piece.rook_open_file_bonus.0;
+                    *eg += self.piece.rook_open_file_bonus.1;
                 } else {
-                    *mg += self.rook_semi_open_file_bonus.0;
-                    *eg += self.rook_semi_open_file_bonus.1;
+                    *mg += self.piece.rook_semi_open_file_bonus.0;
+                    *eg += self.piece.rook_semi_open_file_bonus.1;
                 }
             } else {
-                *mg += self.rook_closed_file_penalty.0;
-                *eg += self.rook_closed_file_penalty.1;
+                *mg += self.piece.rook_closed_file_penalty.0;
+                *eg += self.piece.rook_closed_file_penalty.1;
             }
             let seventh = if color == Color::White { rank == 6 } else { rank == 1 };
             if seventh {
-                *mg += self.rook_seventh_rank_bonus.0;
-                *eg += self.rook_seventh_rank_bonus.1;
+                *mg += self.piece.rook_seventh_rank_bonus.0;
+                *eg += self.piece.rook_seventh_rank_bonus.1;
             }
             rooks &= rooks - 1;
         }
@@ -79,8 +79,8 @@ impl Eval {
                 };
 
                 if same_color_pawns > 0 {
-                    let penalty = self.bad_bishop_penalty;
-                    let multiplier = self.bad_bishop_fixed_multiplier;
+                    let penalty = self.piece.bad_bishop_penalty;
+                    let multiplier = self.piece.bad_bishop_fixed_multiplier;
                     let fixed = {
                         let mut fixed_count = 0u32;
                         let mut p = pawns_bb;
@@ -137,21 +137,21 @@ impl Eval {
             if in_enemy_half && (enemy_attacks & enemy_pawns_bb == 0) {
                 let adj = adjacent_files_mask(file) & !(1u64 << sq_idx);
                 if adj & my_pawns != 0 {
-                    *mg += self.outpost_knight_bonus.0;
-                    *eg += self.outpost_knight_bonus.1;
+                    *mg += self.piece.outpost_knight_bonus.0;
+                    *eg += self.piece.outpost_knight_bonus.1;
                 }
             }
 
             if file == 0 || file == 7 {
-                *mg += self.knight_rim_penalty.0;
-                *eg += self.knight_rim_penalty.1;
+                *mg += self.piece.knight_rim_penalty.0;
+                *eg += self.piece.knight_rim_penalty.1;
             }
 
             let attacks = crate::attack::knight_attacks(sq);
             let safe = (attacks & !us_bb).count_ones() as usize;
             if safe == 0 {
-                *mg += self.knight_trapped_penalty.0;
-                *eg += self.knight_trapped_penalty.1;
+                *mg += self.piece.knight_trapped_penalty.0;
+                *eg += self.piece.knight_trapped_penalty.1;
             }
         }
     }
@@ -203,8 +203,8 @@ impl Eval {
 
                 let multiplier = if blocked == 0 { 3 } else if our_pawns == 0 && enemy_pawns == 0 { 2 } else if blocked.count_ones() == 1 { 1 } else { 0 };
                 if multiplier > 0 {
-                    *mg += self.rook_queen_battery_bonus.0 * multiplier;
-                    *eg += self.rook_queen_battery_bonus.1 * multiplier;
+                    *mg += self.piece.rook_queen_battery_bonus.0 * multiplier;
+                    *eg += self.piece.rook_queen_battery_bonus.1 * multiplier;
                 }
             }
         }
@@ -223,8 +223,8 @@ impl Eval {
             let attacked_pieces = attacks & enemy_bb;
             let count = attacked_pieces.count_ones() as usize;
             if count > 0 && count <= 7 {
-                *mg += self.queen_attack_count_bonus[count];
-                *eg += self.queen_attack_count_bonus[count] / 2;
+                *mg += self.piece.queen_attack_count_bonus[count];
+                *eg += self.piece.queen_attack_count_bonus[count] / 2;
             }
 
             if count >= 2 {
@@ -242,8 +242,8 @@ impl Eval {
                     ud
                 };
                 if undefended.count_ones() >= 2 {
-                    *mg += self.queen_fork_bonus.0;
-                    *eg += self.queen_fork_bonus.1;
+                    *mg += self.piece.queen_fork_bonus.0;
+                    *eg += self.piece.queen_fork_bonus.1;
                 }
             }
         }
@@ -273,13 +273,13 @@ impl Eval {
             }
             count
         };
-        *mg += self.exchange_open_file_bonus.0 * open_files;
-        *eg += self.exchange_open_file_bonus.1 * open_files;
+        *mg += self.piece.exchange_open_file_bonus.0 * open_files;
+        *eg += self.piece.exchange_open_file_bonus.1 * open_files;
 
         let enemy_bishops = (board.pieces_bb(Piece::Bishop) & enemy_bb).count_ones();
         if enemy_bishops >= 2 {
-            *mg += self.exchange_bishop_pair_penalty.0;
-            *eg += self.exchange_bishop_pair_penalty.1;
+            *mg += self.piece.exchange_bishop_pair_penalty.0;
+            *eg += self.piece.exchange_bishop_pair_penalty.1;
         }
 
         let occ = board.occupancy();
@@ -298,8 +298,8 @@ impl Eval {
             };
             let max_mobility = if is_bishop { 13 } else { 8 };
             if max_mobility > 0 && safe <= max_mobility / 4 {
-                *mg += self.exchange_minor_activity_bonus.0;
-                *eg += self.exchange_minor_activity_bonus.1;
+                *mg += self.piece.exchange_minor_activity_bonus.0;
+                *eg += self.piece.exchange_minor_activity_bonus.1;
             }
         }
     }
@@ -312,8 +312,8 @@ impl Eval {
             let rank = sq_idx >> 3;
             let advanced = if color == Color::White { rank >= 3 && rank <= 5 } else { rank >= 2 && rank <= 4 };
             if advanced {
-                *mg += self.space_bonus.0;
-                *eg += self.space_bonus.1;
+                *mg += self.pawn.space_bonus.0;
+                *eg += self.pawn.space_bonus.1;
             }
         }
     }
@@ -331,12 +331,12 @@ impl Eval {
         let ks_diff = own_ks - enemy_ks;
 
         if qs_diff > 0 {
-            *mg += self.pawn_majority_bonus.0 * qs_diff;
-            *eg += self.pawn_majority_bonus.1 * qs_diff;
+            *mg += self.pawn.pawn_majority_bonus.0 * qs_diff;
+            *eg += self.pawn.pawn_majority_bonus.1 * qs_diff;
         }
         if ks_diff > 0 {
-            *mg += self.pawn_majority_bonus.0 * ks_diff;
-            *eg += self.pawn_majority_bonus.1 * ks_diff;
+            *mg += self.pawn.pawn_majority_bonus.0 * ks_diff;
+            *eg += self.pawn.pawn_majority_bonus.1 * ks_diff;
         }
     }
 }

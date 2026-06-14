@@ -1,7 +1,7 @@
 # 10 — Extract MoveOrdering module from search.rs
 
 **Category:** improvement
-**Status:** ready-for-agent
+****Status:** completed
 
 ## Summary
 

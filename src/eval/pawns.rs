@@ -16,19 +16,19 @@ impl Eval {
 
             let ahead_on_file = file_mask(file) & rank_mask_forward(sq, color) & pawns_bb;
             if ahead_on_file != 0 {
-                *mg += self.doubled_pawn_penalty.0;
-                *eg += self.doubled_pawn_penalty.1;
+                *mg += self.pawn.doubled_pawn_penalty.0;
+                *eg += self.pawn.doubled_pawn_penalty.1;
             }
 
             if adjacent_files_mask(file) & pawns_bb == (1u64 << sq_idx) & adjacent_files_mask(file) {
-                *mg += self.isolated_pawn_penalty.0;
-                *eg += self.isolated_pawn_penalty.1;
+                *mg += self.pawn.isolated_pawn_penalty.0;
+                *eg += self.pawn.isolated_pawn_penalty.1;
             }
 
             let ahead = rank_mask_forward(sq, color);
             if ahead & enemy_pawns_bb & adjacent_files_mask(file) == 0 {
-                *mg += self.passed_pawn_bonus[fwd_rank as usize];
-                *eg += self.passed_pawn_bonus[fwd_rank as usize] * 2;
+                *mg += self.pawn.passed_pawn_bonus[fwd_rank as usize];
+                *eg += self.pawn.passed_pawn_bonus[fwd_rank as usize] * 2;
             }
 
             if fwd_rank > 0 && fwd_rank < 6 {
@@ -37,8 +37,8 @@ impl Eval {
                 let fwd_blocked = (1u64 << fwd_sq) & board.occupancy() != 0;
                 if fwd_attacked || fwd_blocked {
                     if (adjacent_files_mask(file) & pawns_bb & rank_mask_forward(sq, color.flip())) == 0 {
-                        *mg += self.backward_pawn_penalty.0;
-                        *eg += self.backward_pawn_penalty.1;
+                        *mg += self.pawn.backward_pawn_penalty.0;
+                        *eg += self.pawn.backward_pawn_penalty.1;
                     }
                 }
             }
@@ -47,21 +47,25 @@ impl Eval {
         }
     }
 
-    pub(crate) fn passed_pawns(&self, pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> u64 {
-        let mut passed = 0u64;
-        let mut bb = pawns_bb;
-        while bb != 0 {
-            let sq_idx = bb.trailing_zeros() as u8;
-            let sq = Square::new(sq_idx).unwrap();
-            let ahead = rank_mask_forward(sq, color);
-            let file = sq.file();
-            if ahead & enemy_pawns_bb & adjacent_files_mask(file) == 0 {
-                passed |= 1u64 << sq_idx;
-            }
-            bb &= bb - 1;
+}
+
+pub(crate) fn passed_pawns(pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> u64 {
+    let mut passed = 0u64;
+    let mut bb = pawns_bb;
+    while bb != 0 {
+        let sq_idx = bb.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        let ahead = rank_mask_forward(sq, color);
+        let file = sq.file();
+        if ahead & enemy_pawns_bb & adjacent_files_mask(file) == 0 {
+            passed |= 1u64 << sq_idx;
         }
-        passed
+        bb &= bb - 1;
     }
+    passed
+}
+
+impl Eval {
 
     pub(crate) fn eval_connected_passers(&self, passers: u64, mg: &mut i32, eg: &mut i32) {
         let mut bb = passers;
@@ -77,8 +81,8 @@ impl Eval {
                 file_mask(file - 1) | file_mask(file + 1)
             };
             if passers & adj != 0 {
-                *mg += self.connected_passer_bonus;
-                *eg += self.connected_passer_bonus * 2;
+                *mg += self.king.connected_passer_bonus;
+                *eg += self.king.connected_passer_bonus * 2;
             }
         }
     }
@@ -110,11 +114,11 @@ impl Eval {
 
             if behind {
                 if is_mine {
-                    *mg += self.rook_behind_passer_bonus.0;
-                    *eg += self.rook_behind_passer_bonus.1;
+                    *mg += self.king.rook_behind_passer_bonus.0;
+                    *eg += self.king.rook_behind_passer_bonus.1;
                 } else {
-                    *mg -= self.rook_behind_passer_bonus.0;
-                    *eg -= self.rook_behind_passer_bonus.1;
+                    *mg -= self.king.rook_behind_passer_bonus.0;
+                    *eg -= self.king.rook_behind_passer_bonus.1;
                 }
             }
         }
@@ -132,14 +136,14 @@ impl Eval {
             let adj = adjacent_files_mask(file);
             let same_rank = if color == Color::White { 0xFFu64 << (rank * 8) } else { 0xFFu64 << (rank * 8) };
             if (adj & pawns_bb & same_rank & !(1u64 << sq_idx)) != 0 {
-                *mg += self.pawn_phalanx_bonus.0;
-                *eg += self.pawn_phalanx_bonus.1;
+                *mg += self.pawn.pawn_phalanx_bonus.0;
+                *eg += self.pawn.pawn_phalanx_bonus.1;
             }
 
             let behind_sqs = crate::attack::pawn_attacks(Square::new(sq_idx).unwrap(), enemy);
             if behind_sqs & pawns_bb != 0 {
-                *mg += self.pawn_chain_bonus.0;
-                *eg += self.pawn_chain_bonus.1;
+                *mg += self.pawn.pawn_chain_bonus.0;
+                *eg += self.pawn.pawn_chain_bonus.1;
             }
         }
     }
@@ -165,8 +169,8 @@ impl Eval {
                 let ahead_after = rank_mask_forward(cap_sq, color);
                 let remaining = ahead_after & enemy_pawns_bb & adjacent_files_mask(file);
                 if remaining == 0 {
-                    *mg += self.candidate_passer_bonus[fwd_rank as usize];
-                    *eg += self.candidate_passer_bonus[fwd_rank as usize] * 2;
+                    *mg += self.pawn.candidate_passer_bonus[fwd_rank as usize];
+                    *eg += self.pawn.candidate_passer_bonus[fwd_rank as usize] * 2;
                 }
             }
         }
@@ -174,7 +178,7 @@ impl Eval {
 
     pub(crate) fn eval_passer_blocker(&self, board: &Board, _pawns_bb: u64, enemy_pawns_bb: u64, color: Color, mg: &mut i32, eg: &mut i32) {
         let enemy = color.flip();
-        let enemy_passers = self.passed_pawns(enemy_pawns_bb, board.pieces_bb(Piece::Pawn) & board.colors_bb(color), enemy);
+        let enemy_passers = passed_pawns(enemy_pawns_bb, board.pieces_bb(Piece::Pawn) & board.colors_bb(color), enemy);
         let us_bb = board.colors_bb(color);
         let mut passers = enemy_passers;
         while passers != 0 {
@@ -183,8 +187,8 @@ impl Eval {
             let block_sq = if enemy == Color::White { sq_idx + 8 } else { sq_idx - 8 };
             if block_sq >= 64 { continue; }
             if (1u64 << block_sq) & us_bb != 0 {
-                *mg += self.passer_blocker_bonus.0;
-                *eg += self.passer_blocker_bonus.1;
+                *mg += self.pawn.passer_blocker_bonus.0;
+                *eg += self.pawn.passer_blocker_bonus.1;
             }
         }
     }

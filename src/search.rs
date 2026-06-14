@@ -1,10 +1,11 @@
+use crate::move_ordering::MoveOrdering;
 use crate::board::{Board, GameResult, MAX_MOVES};
 use crate::eval::Eval;
 use crate::movegen;
 use crate::thread_pool::ThreadPool;
 use crate::tt::{NodeType, TT};
 use crate::types::{Move, MoveKind, Piece};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
@@ -42,6 +43,66 @@ pub struct SearchResult {
     pub multi_pv_lines: Vec<(u8, i32, Vec<Move>)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LmrConfig {
+    pub min_depth: u8,
+    pub min_moves_searched: u8,
+    pub reduction: [u8; 3],
+}
+impl Default for LmrConfig {
+    fn default() -> Self { Self { min_depth: 3, min_moves_searched: 3, reduction: [1, 2, 3] } }
+}
+
+#[derive(Debug, Clone)]
+pub struct NullMoveConfig {
+    pub min_depth: u8,
+    pub r_shallow: u8,
+    pub r_deep: u8,
+    pub deep_threshold: u8,
+}
+impl Default for NullMoveConfig {
+    fn default() -> Self { Self { min_depth: 3, r_shallow: 3, r_deep: 4, deep_threshold: 6 } }
+}
+
+#[derive(Debug, Clone)]
+pub struct AspirationConfig {
+    pub initial_delta: i32,
+    pub depth_threshold: u8,
+}
+impl Default for AspirationConfig {
+    fn default() -> Self { Self { initial_delta: 25, depth_threshold: 4 } }
+}
+
+#[derive(Debug, Clone)]
+pub struct FutilityConfig {
+    pub max_depth: u8,
+    pub margin_d1: i32,
+    pub margin_d2: i32,
+}
+impl Default for FutilityConfig {
+    fn default() -> Self { Self { max_depth: 2, margin_d1: 200, margin_d2: 400 } }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchAlgorithmParams {
+    pub lmr: LmrConfig,
+    pub null_move: NullMoveConfig,
+    pub aspiration: AspirationConfig,
+    pub futility: FutilityConfig,
+    pub soft_time_divisor: u64,
+}
+impl Default for SearchAlgorithmParams {
+    fn default() -> Self {
+        Self {
+            lmr: LmrConfig::default(),
+            null_move: NullMoveConfig::default(),
+            aspiration: AspirationConfig::default(),
+            futility: FutilityConfig::default(),
+            soft_time_divisor: 2,
+        }
+    }
+}
+
 struct SearchState {
     nodes: u64,
     pv: [[Option<Move>; MAX_DEPTH as usize]; MAX_DEPTH as usize],
@@ -50,14 +111,13 @@ struct SearchState {
     start_time: Instant,
     movetime: Option<u64>,
     soft_time: Option<u64>,
-    killers: [[Option<Move>; 2]; MAX_DEPTH as usize],
-    history: [[i32; 64]; 64],
+    move_ordering: MoveOrdering,
     excluded_moves: Vec<Move>,
 }
 
 impl SearchState {
     fn should_stop(&self) -> bool {
-        if unsafe { &*self.stop }.load(Ordering::Relaxed) { return true; }
+        if unsafe { &*self.stop }.load(AtomicOrdering::Relaxed) { return true; }
         if let Some(limit) = self.movetime {
             if self.start_time.elapsed().as_millis() as u64 >= limit { return true; }
         }
@@ -196,15 +256,14 @@ fn search_worker(
         stop: &**stop,
         start_time: start,
         movetime: params.movetime,
-        soft_time: params.movetime.map(|t| t.saturating_mul(1) / 2),
-        killers: [[None; 2]; MAX_DEPTH as usize],
-        history: [[0; 64]; 64],
+        soft_time: params.movetime.map(|t| t / SearchAlgorithmParams::default().soft_time_divisor),
+        move_ordering: MoveOrdering::new(),
         excluded_moves: Vec::new(),
     };
 
     let multi_pv = params.multi_pv.max(1) as usize;
     let mut prev_scores = vec![0i32; multi_pv];
-    let mut delta = 25i32;
+    let mut delta = SearchAlgorithmParams::default().aspiration.initial_delta;
 
     for depth in 1..=max_depth {
         let mut excluded_moves: Vec<Move> = Vec::new();
@@ -219,7 +278,8 @@ fn search_worker(
             let mut alpha = -(CHECKMATE + 100);
             let mut beta = CHECKMATE + 100;
 
-            if depth >= 4 && prev_scores[mpv_idx].abs() < CHECKMATE - 500 {
+            let alg = SearchAlgorithmParams::default();
+            if depth >= alg.aspiration.depth_threshold && prev_scores[mpv_idx].abs() < CHECKMATE - 500 {
                 alpha = prev_scores[mpv_idx] - delta;
                 beta = prev_scores[mpv_idx] + delta;
             }
@@ -340,11 +400,11 @@ fn alpha_beta(
 
     let hash_move = tt_entry.and_then(|e| e.best_move);
 
-    let can_null_move = !is_pv && depth >= 3 && ply > 0 && !board.in_check();
+    let can_null_move = !is_pv && depth >= SearchAlgorithmParams::default().null_move.min_depth && ply > 0 && !board.in_check();
     let has_big_pieces = board.piece_list().iter().any(|&(_, p, _)| p != crate::types::Piece::Pawn && p != crate::types::Piece::King);
 
     if can_null_move && has_big_pieces {
-        let r = if depth >= 6 { 4 } else { 3 };
+        let r = if depth >= SearchAlgorithmParams::default().null_move.deep_threshold { SearchAlgorithmParams::default().null_move.r_deep } else { SearchAlgorithmParams::default().null_move.r_shallow };
         let null_depth = if depth > r { depth - r } else { 0 };
         if null_depth > 0 {
             let undo_null = board.make_null_move();
@@ -354,13 +414,13 @@ fn alpha_beta(
         }
     }
 
-    let static_eval = if depth <= 2 { Some(Eval::default().evaluate(board)) } else { None };
+    let static_eval = if depth <= SearchAlgorithmParams::default().futility.max_depth { Some(Eval::default().evaluate(board)) } else { None };
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let mut move_count: usize = 0;
     movegen::generate_pseudo_legal(board, &mut moves_buf, &mut move_count);
     let moves = &mut moves_buf[..move_count];
-    order_moves(moves, board, hash_move, ply, state, thread_id);
+    state.move_ordering.order_moves(moves, board, hash_move, ply, thread_id);
 
     let side = board.side_to_move();
     let pinned = board.pinned_pieces(side);
@@ -408,11 +468,11 @@ fn alpha_beta(
 
         // Futility pruning: skip quiet moves near horizon when eval is far below alpha
         if let Some(se) = static_eval {
-            if depth <= 2 {
+            if depth <= SearchAlgorithmParams::default().futility.max_depth {
                 let mv_kind = mv.kind();
                 let is_quiet = mv_kind != MoveKind::Capture && mv_kind != MoveKind::Promotion;
                 if is_quiet && !board.in_check() {
-                    let margin: i32 = if depth == 2 { 400 } else { 200 };
+                    let margin: i32 = if depth == 2 { SearchAlgorithmParams::default().futility.margin_d2 } else { SearchAlgorithmParams::default().futility.margin_d1 };
                     if se + margin <= alpha {
                         board.unmake_move(&undo);
                         continue;
@@ -429,13 +489,12 @@ fn alpha_beta(
             // LMR: reduce depth for late quiet, non-killer moves
             let mv_kind = mv.kind();
             let is_quiet = mv_kind != MoveKind::Capture && mv_kind != MoveKind::Promotion;
-            if depth >= 3 && moves_searched >= 3 && is_quiet {
-                let is_killer = state.killers[ply as usize][0] == Some(mv)
-                    || state.killers[ply as usize][1] == Some(mv);
+            if depth >= SearchAlgorithmParams::default().lmr.min_depth && moves_searched >= SearchAlgorithmParams::default().lmr.min_moves_searched as u32 && is_quiet {
+                let is_killer = state.move_ordering.is_killer(mv, ply);
                 // Don't reduce checks (board state has the move already applied)
                 let gives_check = board.in_check();
                 if !is_killer && !gives_check {
-                    let r: u8 = if moves_searched >= 8 { 3 } else if moves_searched >= 5 { 2 } else { 1 };
+                    let r: u8 = if moves_searched >= 8 { SearchAlgorithmParams::default().lmr.reduction[2] } else if moves_searched >= 5 { SearchAlgorithmParams::default().lmr.reduction[1] } else { SearchAlgorithmParams::default().lmr.reduction[0] };
                     if depth > r + 1 {
                         let r_depth = depth - 1 - r;
                         score = -alpha_beta(board, -alpha - 1, -alpha, r_depth, ply + 1, state, tt, false, thread_id);
@@ -467,15 +526,9 @@ fn alpha_beta(
                 if score >= beta {
                     node_type = NodeType::LowerBound;
 
-                    // killer move: store quiet move that caused cutoff
                     let k = mv.kind();
                     if k != MoveKind::Capture && k != MoveKind::Promotion {
-                        let ki = ply as usize;
-                        state.killers[ki][1] = state.killers[ki][0];
-                        state.killers[ki][0] = Some(mv);
-                        let from = mv.from().index() as usize;
-                        let to = mv.to().index() as usize;
-                        state.history[from][to] += (depth as i32) * (depth as i32);
+                        state.move_ordering.record_beta_cutoff(mv, depth, ply);
                     }
 
                     break;
@@ -494,34 +547,6 @@ fn alpha_beta(
         tt.store(hash, best_score, depth, node_type, best_move);
     }
     best_score
-}
-
-fn order_moves(
-    moves: &mut [Move], board: &Board, hash_move: Option<Move>, ply: u8, state: &SearchState, thread_id: u8,
-) {
-    let hash = hash_move.unwrap_or(Move::NULL);
-    let k0 = state.killers[ply as usize][0].unwrap_or(Move::NULL);
-    let k1 = state.killers[ply as usize][1].unwrap_or(Move::NULL);
-
-    moves.sort_by_cached_key(|mv| {
-        if *mv == hash { return i32::MAX; }
-        let k = mv.kind();
-        if k == MoveKind::Capture {
-            let see_val = Eval::default().see(board, *mv);
-            return if see_val > 0 { 10_000 + see_val }
-            else { 2_000 + see_val }; // SEE <= 0: still search, but low priority
-        }
-        if k == MoveKind::Promotion { return 30_000; }
-        if *mv == k0 { return 9_000; }
-        if *mv == k1 { return 8_999; }
-        // history heuristic for quiets
-        let hist = state.history[mv.from().index() as usize][mv.to().index() as usize];
-        let perturb = if ply == 0 && thread_id > 0 {
-            ((mv.from().index().wrapping_mul(thread_id)) % 16) as i32
-        } else { 0 };
-        hist.clamp(0, 8_000) + perturb
-    });
-    moves.reverse();
 }
 
 fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState) -> i32 {
@@ -561,7 +586,7 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u
         }
     }
     if filtered == 0 { return alpha; }
-    order_moves_q(&mut moves_buf[..filtered], board, state);
+    state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board);
 
     for i in 0..filtered {
         let mv = moves_buf[i];
@@ -578,26 +603,6 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u
         if state.should_stop() { break; }
     }
     alpha
-}
-
-fn order_moves_q(moves: &mut [Move], board: &Board, _state: &SearchState) {
-    let mut b = board.clone();
-    moves.sort_by_cached_key(|mv| {
-        if mv.kind() == MoveKind::Capture {
-            let see_val = Eval::default().see(board, *mv);
-            if see_val > 0 { 10_000 + see_val }
-            else { 2_000 + see_val }
-        } else if mv.kind() == MoveKind::Promotion {
-            30_000
-        } else {
-            // quiet check: give moderate priority
-            let undo = b.make_move(*mv);
-            let gives_check = b.in_check() as i32;
-            b.unmake_move(&undo);
-            if gives_check > 0 { 5_000 } else { 0 }
-        }
-    });
-    moves.reverse();
 }
 
 #[cfg(test)]

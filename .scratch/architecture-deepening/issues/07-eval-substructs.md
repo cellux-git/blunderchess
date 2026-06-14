@@ -1,7 +1,7 @@
 # 07 — Group Eval struct into six domain sub-structs
 
 **Category:** improvement
-**Status:** ready-for-agent
+**Status:** completed
 **ADR:** docs/adr/0007-eval-substructs.md
 
 ## Summary

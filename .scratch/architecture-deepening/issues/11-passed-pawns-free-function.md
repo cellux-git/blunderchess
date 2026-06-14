@@ -1,7 +1,7 @@
 # 11 — Make passed_pawns a free function (remove dead &self)
 
 **Category:** improvement
-**Status:** ready-for-agent
+****Status:** completed
 
 ## Summary
 

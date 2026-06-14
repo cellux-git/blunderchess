@@ -8,17 +8,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub struct Engine {
-    pub board: Board,
-    pub tt: Arc<TT>,
-    pub pool: Arc<ThreadPool>,
-    pub stop_flag: Arc<AtomicBool>,
-    pub search_handles: Vec<std::thread::JoinHandle<SearchResult>>,
-    pub multi_pv: u8,
-    pub pondering: bool,
-    pub ponderhit_received: Arc<AtomicBool>,
-    pub book: Option<Book>,
-    pub own_book: bool,
-    pub threads: u8,
+    board: Board,
+    tt: Arc<TT>,
+    pool: Arc<ThreadPool>,
+    stop_flag: Arc<AtomicBool>,
+    search_handles: Vec<std::thread::JoinHandle<SearchResult>>,
+    multi_pv: u8,
+    pondering: bool,
+    ponderhit_received: Arc<AtomicBool>,
+    book: Option<Book>,
+    own_book: bool,
+    threads: u8,
 }
 
 impl Engine {
@@ -40,6 +40,12 @@ impl Engine {
             own_book: false,
             threads: 1,
         }
+    }
+
+    pub fn search_position(&self, board: &Board, depth: u8) -> SearchResult {
+        let params = SearchParams::with_depth(depth);
+        let stop = Arc::new(AtomicBool::new(false));
+        crate::search::search(board, &params, &stop, &self.tt, Some(&self.pool))
     }
 
     pub fn process_command(&mut self, line: &str) -> bool {
@@ -252,11 +258,8 @@ impl Engine {
             }
         }
 
-        // Ensure pool has enough workers for the requested thread count
-        let needed = params.threads.max(1) as usize;
-        if needed > self.pool.size() {
-            self.pool = Arc::new(ThreadPool::new(needed));
-        }
+        let pool_size = self.pool.size();
+        params.threads = params.threads.min(pool_size as u8);
 
         if params.infinite || self.pondering {
             self.start_async_search(params);
@@ -335,9 +338,7 @@ impl Engine {
                         i += 3;
                     } else if i + 3 < args.len() && args[i + 1] == "Threads" && args[i + 2] == "value" {
                         if let Ok(n) = args[i + 3].parse::<u8>() {
-                            let n = n.max(1);
-                            self.threads = n;
-                            self.pool = Arc::new(ThreadPool::new(n as usize));
+                            self.threads = n.max(1);
                         }
                         i += 3;
                     }

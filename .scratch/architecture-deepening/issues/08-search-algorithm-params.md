@@ -1,7 +1,7 @@
 # 08 — Extract SearchAlgorithmParams from hardcoded magic numbers
 
 **Category:** improvement
-**Status:** ready-for-agent
+****Status:** completed
 **ADR:** docs/adr/0008-search-algorithm-params.md
 
 ## Summary

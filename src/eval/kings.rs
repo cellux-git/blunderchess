@@ -22,7 +22,7 @@ impl Eval {
             if ff >= 0 && ff < 8 && rr >= 0 && rr < 8 {
                 let sq_mask = 1u64 << (rr * 8 + ff) as u64;
                 if sq_mask & pawns_bb == 0 {
-                    penalty += self.king_shield_missing_penalty;
+                    penalty += self.king.king_shield_missing_penalty;
                 }
             }
         }
@@ -32,7 +32,7 @@ impl Eval {
         for f in start_file..=end_file {
             let fm = file_mask(f);
             if fm & pawns_bb == 0 && fm & enemy_bb != 0 {
-                penalty += self.king_open_file_penalty;
+                penalty += self.king.king_open_file_penalty;
             }
         }
 
@@ -94,8 +94,8 @@ impl Eval {
             if can_tempo { return; }
         }
 
-        *mg += self.king_opposition_bonus;
-        *eg += self.king_opposition_bonus;
+        *mg += self.king.king_opposition_bonus;
+        *eg += self.king.king_opposition_bonus;
     }
 
     pub(crate) fn eval_king_passer_proximity(&self, board: &Board, color: Color, passers: u64, mg: &mut i32, eg: &mut i32) {
@@ -113,8 +113,8 @@ impl Eval {
 
             if dist_own < dist_enemy {
                 let diff = dist_enemy as i32 - dist_own as i32;
-                *mg += self.king_passer_proximity_bonus_mg * diff;
-                *eg += self.king_passer_proximity_bonus * diff;
+                *mg += self.king.king_passer_proximity_bonus_mg * diff;
+                *eg += self.king.king_passer_proximity_bonus * diff;
             }
         }
     }

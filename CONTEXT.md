@@ -173,11 +173,11 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 23 | Fix unsound Nxb4 sacrifice from pawn PST bias | ✅ DONE | **High** — eval quality | Reduced mg_pawn_table row 1 (rank 2/7) from ~100 avg to ~5, increased rows 2–3 for advanced pawns. Nxb4 static eval from +457 cp Black → neutral. |
 | 24 | Human review of positional evaluation | `needs-info` | **Medium** — eval quality | Review all eval terms; suggest improvements and new terms |
 | 25 | Remove opening-book compensation hacks from knight/bishop/king PST | ✅ DONE | **Medium** — eval quality | Replaced mg_knight (swing -89→+129 → -10→+15), mg_bishop (c1 -82→0), mg_king (e1 -56→-10) with smooth centralization tables. All 142 tests pass. No NPS regression. |
-| 26 | Group Eval into six domain sub-structs | `ready-for-agent` | **High** — testability | ADR-0007. MaterialValues, PieceSquareTables, MobilityTables, PawnEval, PieceEval, KingEval. Each independently testable. |
-| 27 | Extract SearchAlgorithmParams from hardcoded magic numbers | `ready-for-agent` | **Medium** — tunability | ADR-0008. Nested LmrConfig, NullMoveConfig, AspirationConfig, FutilityConfig. 15+ scattered values → one struct. |
-| 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | `ready-for-agent` | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool resize without Arc leak. |
-| 29 | Extract MoveOrdering module from search.rs | `ready-for-agent` | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. Unit-testable. |
-| 30 | Make passed_pawns a free function | `ready-for-agent` | **Low** — cleanup | Remove dead &self parameter. Audit for other unused self in eval methods. |
+| 26 | Group Eval into six domain sub-structs | ✅ DONE | **High** — testability | ADR-0007. MaterialValues, PieceSquareTables, MobilityTables, PawnEval, PieceEval, KingEval with Default impls. All eval functions updated. |
+| 27 | Extract SearchAlgorithmParams from hardcoded magic numbers | ✅ DONE | **Medium** — tunability | ADR-0008. Nested LmrConfig, NullMoveConfig, AspirationConfig, FutilityConfig. 15+ magic numbers → SearchAlgorithmParams::default(). |
+| 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | ✅ DONE | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool no longer replaced at runtime. |
+| 29 | Extract MoveOrdering module from search.rs | ✅ DONE | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. ~55 lines removed from search.rs. |
+| 30 | Make passed_pawns a free function | ✅ DONE | **Low** — cleanup | Removed dead &self parameter. Extracted from impl Eval to standalone function in pawns.rs. |
 
 ## Performance (release build, startpos, 1 thread)
 

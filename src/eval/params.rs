@@ -3,17 +3,33 @@ use crate::board::Board;
 use crate::types::{Color, Move, Piece, Square};
 use crate::attack::{file_mask, adjacent_files_mask, rank_mask_forward, king_distance};
 
-// ---- Eval struct: all tunable parameters ----
+// ---- Sub-structs: domain-grouped eval parameters ----
 
 #[derive(Debug, Clone)]
-pub(crate) struct Eval {
+pub(crate) struct MaterialValues {
     pub(crate) pawn_value: i32,
     pub(crate) knight_value: i32,
     pub(crate) bishop_value: i32,
     pub(crate) rook_value: i32,
     pub(crate) queen_value: i32,
     pub(crate) king_value: i32,
+}
 
+impl Default for MaterialValues {
+    fn default() -> Self {
+        Self {
+            pawn_value: 100,
+            knight_value: 320,
+            bishop_value: 330,
+            rook_value: 500,
+            queen_value: 900,
+            king_value: 20000,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PieceSquareTables {
     pub(crate) mg_pawn_table: [i32; 64],
     pub(crate) eg_pawn_table: [i32; 64],
     pub(crate) mg_knight_table: [i32; 64],
@@ -26,65 +42,16 @@ pub(crate) struct Eval {
     pub(crate) eg_queen_table: [i32; 64],
     pub(crate) mg_king_table: [i32; 64],
     pub(crate) eg_king_table: [i32; 64],
-
-    pub(crate) doubled_pawn_penalty: (i32, i32),
-    pub(crate) isolated_pawn_penalty: (i32, i32),
-    pub(crate) passed_pawn_bonus: [i32; 8],
-    pub(crate) backward_pawn_penalty: (i32, i32),
-    pub(crate) bishop_pair_bonus: (i32, i32),
-    pub(crate) rook_open_file_bonus: (i32, i32),
-    pub(crate) rook_semi_open_file_bonus: (i32, i32),
-    pub(crate) knight_mobility: [i32; 9],
-    pub(crate) bishop_mobility: [i32; 14],
-    pub(crate) rook_mobility: [i32; 15],
-    pub(crate) queen_mobility: [i32; 28],
-    pub(crate) knight_mobility_eg: [i32; 9],
-    pub(crate) bishop_mobility_eg: [i32; 14],
-    pub(crate) rook_mobility_eg: [i32; 15],
-    pub(crate) queen_mobility_eg: [i32; 28],
-    pub(crate) king_shield_missing_penalty: i32,
-    pub(crate) king_open_file_penalty: i32,
-    pub(crate) outpost_knight_bonus: (i32, i32),
-    pub(crate) connected_passer_bonus: i32,
-    pub(crate) rook_behind_passer_bonus: (i32, i32),
-    pub(crate) king_passer_proximity_bonus: i32,
-    pub(crate) king_passer_proximity_bonus_mg: i32,
-    pub(crate) pawn_phalanx_bonus: (i32, i32),
-    pub(crate) pawn_chain_bonus: (i32, i32),
-    pub(crate) candidate_passer_bonus: [i32; 8],
-    pub(crate) passer_blocker_bonus: (i32, i32),
-    pub(crate) king_opposition_bonus: i32,
-    pub(crate) space_bonus: (i32, i32),
-    pub(crate) pawn_majority_bonus: (i32, i32),
-    pub(crate) rook_closed_file_penalty: (i32, i32),
-    pub(crate) rook_seventh_rank_bonus: (i32, i32),
-    pub(crate) bad_bishop_penalty: (i32, i32),
-    pub(crate) bad_bishop_fixed_multiplier: i32,
-    pub(crate) rook_queen_battery_bonus: (i32, i32),
-    pub(crate) queen_fork_bonus: (i32, i32),
-    pub(crate) queen_attack_count_bonus: [i32; 8],
-    pub(crate) knight_rim_penalty: (i32, i32),
-    pub(crate) knight_trapped_penalty: (i32, i32),
-    pub(crate) exchange_open_file_bonus: (i32, i32),
-    pub(crate) exchange_bishop_pair_penalty: (i32, i32),
-    pub(crate) exchange_minor_activity_bonus: (i32, i32),
 }
 
-impl Default for Eval {
+impl Default for PieceSquareTables {
     fn default() -> Self {
         Self {
-            pawn_value: 100,
-            knight_value: 320,
-            bishop_value: 330,
-            rook_value: 500,
-            queen_value: 900,
-            king_value: 20000,
-
             mg_pawn_table: [
                  0,   0,   0,   0,   0,   0,  0,   0,
                  5,  10,   0,   5,  10,   5,  0, -10,
                 30,   7,  26,  50,  65,  56, 60, -20,
-                0,  45,  38,  55,  38,  24, 29, -10,
+                 0,  45,  38,  55,  38,  24, 29, -10,
                -27,  -2,  -5,  12,  17,   6, 10, -25,
                -26,  -4,  -4, -10,   3,   3, 33, -12,
                -35,  -1, -20, -23, -15,  24, 38, -22,
@@ -200,14 +167,25 @@ impl Default for Eval {
                  -60, -20,   0,  10,  10,   0, -20,  -60,
                 -100, -60, -40, -30, -30, -40, -60, -100,
             ],
+        }
+    }
+}
 
-            doubled_pawn_penalty: (-12, -24),
-            isolated_pawn_penalty: (-10, -20),
-            passed_pawn_bonus: [0, 5, 10, 20, 40, 70, 100, 0],
-            backward_pawn_penalty: (-8, -16),
-            bishop_pair_bonus: (25, 45),
-            rook_open_file_bonus: (25, 10),
-            rook_semi_open_file_bonus: (12, 5),
+#[derive(Debug, Clone)]
+pub(crate) struct MobilityTables {
+    pub(crate) knight_mobility: [i32; 9],
+    pub(crate) bishop_mobility: [i32; 14],
+    pub(crate) rook_mobility: [i32; 15],
+    pub(crate) queen_mobility: [i32; 28],
+    pub(crate) knight_mobility_eg: [i32; 9],
+    pub(crate) bishop_mobility_eg: [i32; 14],
+    pub(crate) rook_mobility_eg: [i32; 15],
+    pub(crate) queen_mobility_eg: [i32; 28],
+}
+
+impl Default for MobilityTables {
+    fn default() -> Self {
+        Self {
             knight_mobility: [-20, -6, 6, 14, 19, 22, 24, 25, 25],
             bishop_mobility: [-20, -6, 6, 14, 20, 24, 27, 29, 31, 32, 33, 34, 35, 35],
             rook_mobility: [-20, -6, 6, 14, 20, 25, 28, 31, 33, 34, 35, 36, 37, 37, 37],
@@ -222,32 +200,130 @@ impl Default for Eval {
                 -20, -3, 3, 7, 10, 13, 15, 16, 18, 19, 20, 21, 22, 22,
                 23, 23, 24, 24, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25,
             ],
-            king_shield_missing_penalty: -12,
-            king_open_file_penalty: -20,
-            outpost_knight_bonus: (18, 8),
-            connected_passer_bonus: 20,
-            rook_behind_passer_bonus: (20, 30),
-            king_passer_proximity_bonus: 10,
-            king_passer_proximity_bonus_mg: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PawnEval {
+    pub(crate) doubled_pawn_penalty: (i32, i32),
+    pub(crate) isolated_pawn_penalty: (i32, i32),
+    pub(crate) passed_pawn_bonus: [i32; 8],
+    pub(crate) backward_pawn_penalty: (i32, i32),
+    pub(crate) pawn_phalanx_bonus: (i32, i32),
+    pub(crate) pawn_chain_bonus: (i32, i32),
+    pub(crate) candidate_passer_bonus: [i32; 8],
+    pub(crate) passer_blocker_bonus: (i32, i32),
+    pub(crate) space_bonus: (i32, i32),
+    pub(crate) pawn_majority_bonus: (i32, i32),
+}
+
+impl Default for PawnEval {
+    fn default() -> Self {
+        Self {
+            doubled_pawn_penalty: (-12, -24),
+            isolated_pawn_penalty: (-10, -20),
+            passed_pawn_bonus: [0, 5, 10, 20, 40, 70, 100, 0],
+            backward_pawn_penalty: (-8, -16),
             pawn_phalanx_bonus: (8, 12),
             pawn_chain_bonus: (5, 8),
             candidate_passer_bonus: [0, 2, 5, 10, 20, 35, 50, 0],
             passer_blocker_bonus: (10, 15),
-            king_opposition_bonus: 50,
             space_bonus: (5, 3),
             pawn_majority_bonus: (8, 14),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PieceEval {
+    pub(crate) bishop_pair_bonus: (i32, i32),
+    pub(crate) rook_open_file_bonus: (i32, i32),
+    pub(crate) rook_semi_open_file_bonus: (i32, i32),
+    pub(crate) rook_closed_file_penalty: (i32, i32),
+    pub(crate) rook_seventh_rank_bonus: (i32, i32),
+    pub(crate) rook_queen_battery_bonus: (i32, i32),
+    pub(crate) outpost_knight_bonus: (i32, i32),
+    pub(crate) knight_rim_penalty: (i32, i32),
+    pub(crate) knight_trapped_penalty: (i32, i32),
+    pub(crate) bad_bishop_penalty: (i32, i32),
+    pub(crate) bad_bishop_fixed_multiplier: i32,
+    pub(crate) queen_fork_bonus: (i32, i32),
+    pub(crate) queen_attack_count_bonus: [i32; 8],
+    pub(crate) exchange_open_file_bonus: (i32, i32),
+    pub(crate) exchange_bishop_pair_penalty: (i32, i32),
+    pub(crate) exchange_minor_activity_bonus: (i32, i32),
+}
+
+impl Default for PieceEval {
+    fn default() -> Self {
+        Self {
+            bishop_pair_bonus: (25, 45),
+            rook_open_file_bonus: (25, 10),
+            rook_semi_open_file_bonus: (12, 5),
             rook_closed_file_penalty: (-15, -20),
             rook_seventh_rank_bonus: (30, 40),
-            bad_bishop_penalty: (-20, -30),
-            bad_bishop_fixed_multiplier: 2,
             rook_queen_battery_bonus: (15, 20),
-            queen_fork_bonus: (30, 25),
-            queen_attack_count_bonus: [0, 4, 8, 12, 16, 20, 24, 28],
+            outpost_knight_bonus: (18, 8),
             knight_rim_penalty: (-10, -15),
             knight_trapped_penalty: (-25, -35),
+            bad_bishop_penalty: (-20, -30),
+            bad_bishop_fixed_multiplier: 2,
+            queen_fork_bonus: (30, 25),
+            queen_attack_count_bonus: [0, 4, 8, 12, 16, 20, 24, 28],
             exchange_open_file_bonus: (10, 15),
             exchange_bishop_pair_penalty: (-20, -30),
             exchange_minor_activity_bonus: (15, 20),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct KingEval {
+    pub(crate) king_shield_missing_penalty: i32,
+    pub(crate) king_open_file_penalty: i32,
+    pub(crate) king_opposition_bonus: i32,
+    pub(crate) connected_passer_bonus: i32,
+    pub(crate) rook_behind_passer_bonus: (i32, i32),
+    pub(crate) king_passer_proximity_bonus: i32,
+    pub(crate) king_passer_proximity_bonus_mg: i32,
+}
+
+impl Default for KingEval {
+    fn default() -> Self {
+        Self {
+            king_shield_missing_penalty: -12,
+            king_open_file_penalty: -20,
+            king_opposition_bonus: 50,
+            connected_passer_bonus: 20,
+            rook_behind_passer_bonus: (20, 30),
+            king_passer_proximity_bonus: 10,
+            king_passer_proximity_bonus_mg: 5,
+        }
+    }
+}
+
+// ---- Eval struct: container for all six sub-structs ----
+
+#[derive(Debug, Clone)]
+pub(crate) struct Eval {
+    pub(crate) material: MaterialValues,
+    pub(crate) pst: PieceSquareTables,
+    pub(crate) mobility: MobilityTables,
+    pub(crate) pawn: PawnEval,
+    pub(crate) piece: PieceEval,
+    pub(crate) king: KingEval,
+}
+
+impl Default for Eval {
+    fn default() -> Self {
+        Self {
+            material: MaterialValues::default(),
+            pst: PieceSquareTables::default(),
+            mobility: MobilityTables::default(),
+            pawn: PawnEval::default(),
+            piece: PieceEval::default(),
+            king: KingEval::default(),
         }
     }
 }

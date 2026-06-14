@@ -1,5 +1,6 @@
 mod params;
 mod pawns;
+use pawns::passed_pawns;
 mod kings;
 mod mobility;
 mod pieces;
@@ -13,12 +14,12 @@ use crate::types::{Color, Piece, Square};
 impl Eval {
     fn material_value(&self, piece: Piece) -> i32 {
         match piece {
-            Piece::Pawn => self.pawn_value,
-            Piece::Knight => self.knight_value,
-            Piece::Bishop => self.bishop_value,
-            Piece::Rook => self.rook_value,
-            Piece::Queen => self.queen_value,
-            Piece::King => self.king_value,
+            Piece::Pawn => self.material.pawn_value,
+            Piece::Knight => self.material.knight_value,
+            Piece::Bishop => self.material.bishop_value,
+            Piece::Rook => self.material.rook_value,
+            Piece::Queen => self.material.queen_value,
+            Piece::King => self.material.king_value,
         }
     }
 
@@ -77,12 +78,12 @@ impl Eval {
         for &(sq, piece, pc) in board.piece_list() {
             if pc != color { continue; }
             let (mg_pst, eg_pst) = match piece {
-                Piece::Pawn => self.pst_value(&self.mg_pawn_table, &self.eg_pawn_table, sq, color),
-                Piece::Knight => self.pst_value(&self.mg_knight_table, &self.eg_knight_table, sq, color),
-                Piece::Bishop => self.pst_value(&self.mg_bishop_table, &self.eg_bishop_table, sq, color),
-                Piece::Rook => self.pst_value(&self.mg_rook_table, &self.eg_rook_table, sq, color),
-                Piece::Queen => self.pst_value(&self.mg_queen_table, &self.eg_queen_table, sq, color),
-                Piece::King => self.pst_value(&self.mg_king_table, &self.eg_king_table, sq, color),
+                Piece::Pawn => self.pst_value(&self.pst.mg_pawn_table, &self.pst.eg_pawn_table, sq, color),
+                Piece::Knight => self.pst_value(&self.pst.mg_knight_table, &self.pst.eg_knight_table, sq, color),
+                Piece::Bishop => self.pst_value(&self.pst.mg_bishop_table, &self.pst.eg_bishop_table, sq, color),
+                Piece::Rook => self.pst_value(&self.pst.mg_rook_table, &self.pst.eg_rook_table, sq, color),
+                Piece::Queen => self.pst_value(&self.pst.mg_queen_table, &self.pst.eg_queen_table, sq, color),
+                Piece::King => self.pst_value(&self.pst.mg_king_table, &self.pst.eg_king_table, sq, color),
             };
             mg_score += self.material_value(piece) + mg_pst;
             eg_score += self.material_value(piece) + eg_pst;
@@ -97,8 +98,8 @@ impl Eval {
         // bishop pair
         let bishops_bb = board.pieces_bb(Piece::Bishop) & us_bb;
         if bishops_bb.count_ones() >= 2 {
-            mg_score += self.bishop_pair_bonus.0;
-            eg_score += self.bishop_pair_bonus.1;
+            mg_score += self.piece.bishop_pair_bonus.0;
+            eg_score += self.piece.bishop_pair_bonus.1;
         }
 
         // bad bishops (generalized)
@@ -117,7 +118,7 @@ impl Eval {
         self.eval_queen_multiattack(board, color, enemy, &mut mg_score, &mut eg_score);
 
         // passed pawn bonuses
-        let my_passers = self.passed_pawns(pawns_bb, enemy_pawns_bb, color);
+        let my_passers = passed_pawns(pawns_bb, enemy_pawns_bb, color);
         self.eval_connected_passers(my_passers, &mut mg_score, &mut eg_score);
         self.eval_rook_behind_passer(board, color, my_passers, &mut mg_score, &mut eg_score);
         self.eval_king_passer_proximity(board, color, my_passers, &mut mg_score, &mut eg_score);
@@ -251,9 +252,9 @@ mod tests {
     fn test_custom_piece_values() {
         let board = Board::from_fen("k7/8/8/8/8/8/8/K1N5 w - - 0 1").unwrap();
         let mut ev = Eval::default();
-        ev.knight_value = 200;
+        ev.material.knight_value = 200;
         let low = ev.evaluate(&board);
-        ev.knight_value = 500;
+        ev.material.knight_value = 500;
         let high = ev.evaluate(&board);
         assert!(high > low);
     }
@@ -408,9 +409,9 @@ mod tests {
     fn test_rook_behind_passer_bonus() {
         // zero out rook-file bonuses so only behind-passer matters
         let mut ev = Eval::default();
-        ev.rook_open_file_bonus = (0, 0);
-        ev.rook_semi_open_file_bonus = (0, 0);
-        ev.rook_closed_file_penalty = (0, 0);
+        ev.piece.rook_open_file_bonus = (0, 0);
+        ev.piece.rook_semi_open_file_bonus = (0, 0);
+        ev.piece.rook_closed_file_penalty = (0, 0);
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/P7/8/R7/K7 w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/8/8/P7/8/8/K1R5 w - -").unwrap());
         assert!(s1 > s2);
@@ -453,7 +454,7 @@ mod tests {
     fn test_space_bonus() {
         // exaggerated space bonus to overcome PST differences between ranks
         let mut ev = Eval::default();
-        ev.space_bonus = (300, 300);
+        ev.pawn.space_bonus = (300, 300);
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/2P1P3/8/8/K7 w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/8/2P1P3/K7 w - -").unwrap());
         assert!(s1 > s2);
@@ -480,9 +481,9 @@ mod tests {
         let fen = "k7/3b4/8/8/8/8/3r4/K2Q4 w - -";
         let board = Board::from_fen(fen).unwrap();
         let mut ev = Eval::default();
-        ev.queen_attack_count_bonus = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
+        ev.piece.queen_attack_count_bonus = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
         let s_high = ev.evaluate(&board);
-        ev.queen_attack_count_bonus = [0; 8];
+        ev.piece.queen_attack_count_bonus = [0; 8];
         let s_low = ev.evaluate(&board);
         assert!(s_high > s_low);
     }
@@ -491,8 +492,8 @@ mod tests {
     fn test_queen_fork_bonus() {
         // custom: big fork bonus, zero count. Fork: 2 undefended pieces attacked by Q.
         let mut ev = Eval::default();
-        ev.queen_fork_bonus = (300, 300);
-        ev.queen_attack_count_bonus = [0; 8];
+        ev.piece.queen_fork_bonus = (300, 300);
+        ev.piece.queen_attack_count_bonus = [0; 8];
         let s1 = ev.evaluate(&Board::from_fen("k7/8/5b2/8/3Q4/8/8/r6K w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/6b1/8/3Q4/8/8/r6K w - -").unwrap());
         assert!(s1 > s2);
@@ -517,15 +518,15 @@ mod tests {
     fn test_rook_mobility() {
         // same material (K+R+1P), rook on b1: open file vs blocked by own pawn
         let mut ev = Eval::default();
-        ev.mg_pawn_table = [0; 64]; ev.eg_pawn_table = [0; 64];
-        ev.mg_rook_table = [0; 64]; ev.eg_rook_table = [0; 64];
-        ev.rook_open_file_bonus = (0, 0);
-        ev.rook_semi_open_file_bonus = (0, 0);
-        ev.rook_closed_file_penalty = (0, 0);
-        ev.rook_behind_passer_bonus = (0, 0);
-        ev.passed_pawn_bonus = [0; 8];
-        ev.rook_mobility = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
-        ev.rook_mobility_eg = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
+        ev.pst.mg_pawn_table = [0; 64]; ev.pst.eg_pawn_table = [0; 64];
+        ev.pst.mg_rook_table = [0; 64]; ev.pst.eg_rook_table = [0; 64];
+        ev.piece.rook_open_file_bonus = (0, 0);
+        ev.piece.rook_semi_open_file_bonus = (0, 0);
+        ev.piece.rook_closed_file_penalty = (0, 0);
+        ev.king.rook_behind_passer_bonus = (0, 0);
+        ev.pawn.passed_pawn_bonus = [0; 8];
+        ev.mobility.rook_mobility = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
+        ev.mobility.rook_mobility_eg = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
         // s1: R b1, P a3 → b-file open, mobility ~13
         // s2: R b1, P b3 → b-file blocked, mobility ~7
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/P7/8/KR6 w - -").unwrap());
@@ -575,10 +576,10 @@ mod tests {
     fn test_king_safety_zone_attackers() {
         // zero out PST to isolate zone-attacker penalty
         let mut ev = Eval::default();
-        ev.king_shield_missing_penalty = 0;
-        ev.king_open_file_penalty = 0;
-        ev.mg_queen_table = [0; 64];
-        ev.eg_queen_table = [0; 64];
+        ev.king.king_shield_missing_penalty = 0;
+        ev.king.king_open_file_penalty = 0;
+        ev.pst.mg_queen_table = [0; 64];
+        ev.pst.eg_queen_table = [0; 64];
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/8/4q3/4K3 w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/5q2/8/8/8/8/4K3 w - -").unwrap());
         assert!(s2 > s1);
