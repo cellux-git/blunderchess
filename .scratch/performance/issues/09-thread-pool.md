@@ -1,6 +1,6 @@
 # 09 — Thread pool for search workers
 
-**Status**: `ready-for-agent`
+**Status**: `completed`
 **Category**: `enhancement`
 
 ## Problem
@@ -19,11 +19,11 @@ Recommend option A for zero-dependency, option B for simplicity. The current zer
 
 ## Acceptance criteria
 
-- [ ] Threads created once at engine startup, reused across searches
-- [ ] `std::thread::spawn` no longer called in search hot path
-- [ ] All 86 unit tests pass
-- [ ] All 10 tactical tests pass
-- [ ] Multi-threaded search test passes
-- [ ] No regression in `go`/`stop` latency
+- [x] Threads created once at engine startup, reused across searches
+- [x] `std::thread::spawn` no longer called in search hot path
+- [x] All 131 unit tests pass
+- [x] All 10 tactical tests pass
+- [x] Multi-threaded search test passes
+- [x] No regression in `go`/`stop` latency
 
 ## Comments

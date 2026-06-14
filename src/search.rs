@@ -1,10 +1,11 @@
 use crate::board::{Board, GameResult, MAX_MOVES};
 use crate::eval::Eval;
 use crate::movegen;
+use crate::thread_pool::ThreadPool;
 use crate::tt::{NodeType, TT};
 use crate::types::{Move, MoveKind, Piece};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 pub const CHECKMATE: i32 = 1_000_000;
@@ -77,11 +78,12 @@ pub fn search(
     params: &SearchParams,
     stop: &Arc<AtomicBool>,
     tt: &Arc<TT>,
+    pool: Option<&ThreadPool>,
 ) -> SearchResult {
     if params.threads.max(1) == 1 {
         return search_single(board, params, stop, tt, 0);
     }
-    search_mt(board, params, stop, tt)
+    search_mt(board, params, stop, tt, pool)
 }
 
 pub fn search_single(
@@ -100,6 +102,7 @@ pub fn search_mt(
     params: &SearchParams,
     stop: &Arc<AtomicBool>,
     tt: &Arc<TT>,
+    pool: Option<&ThreadPool>,
 ) -> SearchResult {
     let num_threads = params.threads.max(1) as usize;
     if num_threads == 1 {
@@ -115,26 +118,52 @@ pub fn search_mt(
         best_move: None, score: 0, depth: 0, pv: Vec::new(), nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
     }));
 
-    let mut handles = Vec::with_capacity(num_threads);
+    if let Some(pool) = pool.filter(|p| p.size() >= num_threads) {
+        let barrier = Arc::new(Barrier::new(num_threads + 1));
 
-    for tid in 0..num_threads as u8 {
-        let mut b = board.clone();
-        let p = params.clone();
-        let real_stop = if tid == 0 { Arc::clone(&stop) } else { Arc::new(AtomicBool::new(false)) };
-        let tt = tt.clone();
-        let best = Arc::clone(&best_result);
+        for tid in 0..num_threads as u8 {
+            let mut b = board.clone();
+            let p = params.clone();
+            let real_stop = if tid == 0 { Arc::clone(&stop) } else { Arc::new(AtomicBool::new(false)) };
+            let tt = tt.clone();
+            let best = Arc::clone(&best_result);
+            let bar = Arc::clone(&barrier);
 
-        let handle = std::thread::spawn(move || {
-            let result = search_worker(&mut b, &p, &real_stop, &tt, tid);
-            let mut best = best.lock().unwrap();
-            if result.depth > best.depth || (result.depth == best.depth && result.best_move.is_some()) {
-                *best = result;
-            }
-        });
-        handles.push(handle);
+            pool.execute(move || {
+                let result = search_worker(&mut b, &p, &real_stop, &tt, tid);
+                {
+                    let mut best = best.lock().unwrap();
+                    if result.depth > best.depth || (result.depth == best.depth && result.best_move.is_some()) {
+                        *best = result;
+                    }
+                }
+                bar.wait();
+            });
+        }
+
+        barrier.wait();
+    } else {
+        let mut handles = Vec::with_capacity(num_threads);
+
+        for tid in 0..num_threads as u8 {
+            let mut b = board.clone();
+            let p = params.clone();
+            let real_stop = if tid == 0 { Arc::clone(&stop) } else { Arc::new(AtomicBool::new(false)) };
+            let tt = tt.clone();
+            let best = Arc::clone(&best_result);
+
+            let handle = std::thread::spawn(move || {
+                let result = search_worker(&mut b, &p, &real_stop, &tt, tid);
+                let mut best = best.lock().unwrap();
+                if result.depth > best.depth || (result.depth == best.depth && result.best_move.is_some()) {
+                    *best = result;
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles { let _ = handle.join(); }
     }
-
-    for handle in handles { let _ = handle.join(); }
 
     let mut result = best_result.lock().unwrap().clone();
     if result.nodes == 0 { result.nodes = 1; }
@@ -585,7 +614,7 @@ mod tests {
         let params = SearchParams::with_depth(2);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some());
     }
 
@@ -596,7 +625,7 @@ mod tests {
         let params = SearchParams::with_depth(3);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some());
         // Qh5xf7 should score very high (mate in 1 or near-mate)
         assert!(result.score > 1000,
@@ -608,8 +637,8 @@ mod tests {
         let board = Board::from_initial();
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let r1 = search(&board, &SearchParams::with_depth(1), &stop, &tt);
-        let r2 = search(&board, &SearchParams::with_depth(3), &stop, &tt);
+        let r1 = search(&board, &SearchParams::with_depth(1), &stop, &tt, None);
+        let r2 = search(&board, &SearchParams::with_depth(3), &stop, &tt, None);
         assert!(r1.depth <= r2.depth);
     }
 
@@ -619,7 +648,7 @@ mod tests {
         let params = SearchParams::with_depth(20);
         let stop = Arc::new(AtomicBool::new(true));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some() || result.depth == 0);
     }
 
@@ -630,7 +659,7 @@ mod tests {
         params.threads = 2;
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some());
     }
 
@@ -644,7 +673,7 @@ mod tests {
         let params = SearchParams::with_depth(1);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some(), "Shallow search should return a move");
     }
 
@@ -655,7 +684,7 @@ mod tests {
         let params = SearchParams::with_depth(3);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(!result.pv.is_empty(), "PV should not be empty after depth-3 search");
         assert!(result.pv.len() >= 3, "PV length should be >= 3, got {}", result.pv.len());
         assert_eq!(result.pv[0], result.best_move.unwrap(),
@@ -670,7 +699,7 @@ mod tests {
         let params = SearchParams::with_depth(3);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.score >= 9000, "Expected mate score >= 9000, got {}", result.score);
         assert!(result.best_move.is_some(), "Should have a best move");
         let best = result.best_move.unwrap();
@@ -687,9 +716,9 @@ mod tests {
         let params = SearchParams::with_depth(4);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result1 = search(&board, &params, &stop, &tt);
+        let result1 = search(&board, &params, &stop, &tt, None);
         assert!(result1.best_move.is_some(), "First search should return a move");
-        let result2 = search(&board, &params, &stop, &tt);
+        let result2 = search(&board, &params, &stop, &tt, None);
         assert!(result2.best_move.is_some(), "Second search should also return a move");
     }
 
@@ -701,7 +730,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(true));
         let tt = make_tt();
         let start = std::time::Instant::now();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         let elapsed_ms = start.elapsed().as_millis();
         assert!(elapsed_ms < 5000,
             "Search with pre-set stop flag should finish quickly, took {}ms", elapsed_ms);
@@ -716,7 +745,7 @@ mod tests {
         let params = SearchParams::with_depth(3);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.depth >= 1, "Iterative deepening should reach at least depth 1");
         assert!(result.best_move.is_some(), "Should have a best move");
         assert!(result.nodes > 0, "Should have searched nodes");
@@ -732,7 +761,7 @@ mod tests {
         let params = SearchParams::with_depth(2);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.score.abs() < 100,
             "Score should be close to 0 for two kings, got {}", result.score);
     }
@@ -748,7 +777,7 @@ mod tests {
         let params = SearchParams::with_depth(1);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some(), "Should find a move");
         // Capturing the queen is much better than not capturing
         // Score should be significantly better than losing a queen (~ -900)
@@ -766,7 +795,7 @@ mod tests {
         let params = SearchParams::with_depth(4);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some(), "search should return a move");
     }
 
@@ -781,7 +810,7 @@ mod tests {
             let params = SearchParams::with_depth(depth);
             let stop = Arc::new(AtomicBool::new(false));
             let tt = make_tt();
-            let result = search(&board, &params, &stop, &tt);
+            let result = search(&board, &params, &stop, &tt, None);
             if let Some(bm) = result.best_move {
                 let mv_str = bm.to_string();
                 assert_ne!(
@@ -807,7 +836,7 @@ mod tests {
         let params = SearchParams::with_depth(1);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(
             result.score <= -(CHECKMATE - 50),
             "Checkmated side must have score <= -MATE; got {}",
@@ -830,7 +859,7 @@ mod tests {
         let params = SearchParams::with_depth(1);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         assert!(
             result.score >= CHECKMATE - 50,
             "Quiet mate Qh7# must score near +MATE at depth 1; got {} (best={})",
@@ -854,9 +883,9 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
 
         // Depth 2: early-exit in alpha_beta catches the checkmate
-        let r2 = search(&board, &SearchParams::with_depth(2), &stop, &make_tt());
+        let r2 = search(&board, &SearchParams::with_depth(2), &stop, &make_tt(), None);
         // Depth 1: quiescence catches the checkmate
-        let r1 = search(&board, &SearchParams::with_depth(1), &stop, &make_tt());
+        let r1 = search(&board, &SearchParams::with_depth(1), &stop, &make_tt(), None);
 
         assert!(
             r1.score <= -(CHECKMATE - 50) && r2.score <= -(CHECKMATE - 50),
@@ -880,7 +909,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
         let start = std::time::Instant::now();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         let elapsed = start.elapsed().as_millis();
         assert!(result.best_move.is_some(), "search should return a move");
         assert!(elapsed < 5000, "search with 500ms movetime took {elapsed}ms, should stop quickly");
@@ -903,7 +932,7 @@ mod tests {
         let params = SearchParams::with_depth(1);
         let stop = Arc::new(AtomicBool::new(false));
         let tt = make_tt();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         if let Some(bm) = result.best_move {
             assert_ne!((bm.from(), bm.to()), (e1, f1),
                 "search picked illegal move e1f1 (does not resolve check)");

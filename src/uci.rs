@@ -1,6 +1,7 @@
 use crate::board::Board;
 use crate::book::Book;
 use crate::search::{SearchParams, SearchResult};
+use crate::thread_pool::ThreadPool;
 use crate::tt::TT;
 use crate::types::Color;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +10,7 @@ use std::sync::Arc;
 pub struct Engine {
     pub board: Board,
     pub tt: Arc<TT>,
+    pub pool: Arc<ThreadPool>,
     pub stop_flag: Arc<AtomicBool>,
     pub search_handles: Vec<std::thread::JoinHandle<SearchResult>>,
     pub multi_pv: u8,
@@ -22,9 +24,13 @@ pub struct Engine {
 impl Engine {
     pub fn new() -> Engine {
         let tt = TT::new(64);
+        let default_threads = std::thread::available_parallelism()
+            .map(|n| n.get().max(1))
+            .unwrap_or(4);
         Engine {
             board: Board::from_initial(),
             tt: Arc::new(tt),
+            pool: Arc::new(ThreadPool::new(default_threads)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             search_handles: Vec::new(),
             multi_pv: 1,
@@ -246,11 +252,17 @@ impl Engine {
             }
         }
 
+        // Ensure pool has enough workers for the requested thread count
+        let needed = params.threads.max(1) as usize;
+        if needed > self.pool.size() {
+            self.pool = Arc::new(ThreadPool::new(needed));
+        }
+
         if params.infinite || self.pondering {
             self.start_async_search(params);
         } else {
             let stop = Arc::new(AtomicBool::new(false));
-            let result = crate::search::search(&self.board, &params, &stop, &self.tt);
+            let result = crate::search::search(&self.board, &params, &stop, &self.tt, Some(&self.pool));
             self.report_result(&result);
         }
     }
@@ -261,11 +273,12 @@ impl Engine {
         let board = self.board.clone();
         let tt = self.tt.clone();
         let stop = self.stop_flag.clone();
+        let pool = self.pool.clone();
         let pondering = self.pondering;
         let ponderhit = self.ponderhit_received.clone();
 
         let handle = std::thread::spawn(move || {
-            let result = crate::search::search(&board, &params, &stop, &tt);
+            let result = crate::search::search(&board, &params, &stop, &tt, Some(&pool));
             if pondering && !ponderhit.load(Ordering::SeqCst) {
                 return SearchResult {
                     best_move: None, score: 0, depth: 0, pv: Vec::new(),
@@ -322,7 +335,9 @@ impl Engine {
                         i += 3;
                     } else if i + 3 < args.len() && args[i + 1] == "Threads" && args[i + 2] == "value" {
                         if let Ok(n) = args[i + 3].parse::<u8>() {
-                            self.threads = n.max(1);
+                            let n = n.max(1);
+                            self.threads = n;
+                            self.pool = Arc::new(ThreadPool::new(n as usize));
                         }
                         i += 3;
                     }
@@ -480,7 +495,7 @@ mod tests {
         assert!(engine.process_command("position startpos"));
         let params = SearchParams::with_depth(5);
         let stop = Arc::new(AtomicBool::new(false));
-        let result = crate::search::search(&engine.board, &params, &stop, &engine.tt);
+        let result = crate::search::search(&engine.board, &params, &stop, &engine.tt, None);
         assert!(result.best_move.is_some(), "go depth 5 should return a bestmove");
     }
 
@@ -504,7 +519,7 @@ mod tests {
         params.movetime = Some(ms);
         let stop = Arc::new(AtomicBool::new(false));
         let start = std::time::Instant::now();
-        let result = crate::search::search(&engine.board, &params, &stop, &engine.tt);
+        let result = crate::search::search(&engine.board, &params, &stop, &engine.tt, None);
         let elapsed = start.elapsed().as_millis() as u64;
         assert!(result.best_move.is_some(), "search should return a bestmove");
         // Search stops between depth iterations, so elapsed can overshoot movetime.

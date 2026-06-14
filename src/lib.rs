@@ -4,6 +4,7 @@ pub mod book;
 pub mod eval;
 pub mod movegen;
 pub mod search;
+pub mod thread_pool;
 pub mod tt;
 pub mod types;
 pub mod uci;

@@ -1,6 +1,7 @@
 use blunderchess::attack::init_slider_tables;
 use blunderchess::board::Board;
 use blunderchess::search::{search, SearchParams, SearchResult};
+use blunderchess::thread_pool::ThreadPool;
 use blunderchess::tt::TT;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ fn search_position(fen: &str, depth: u8) -> SearchResult {
     let params = SearchParams::with_depth(depth);
     let stop = Arc::new(AtomicBool::new(false));
     let tt = Arc::new(TT::new(16));
-    search(&board, &params, &stop, &tt)
+    search(&board, &params, &stop, &tt, None)
 }
 
 fn assert_best_move_in(fen: &str, depth: u8, acceptable: &[&str], label: &str) {
@@ -161,7 +162,7 @@ fn bench_nps_vs_depth() {
     for depth in 3..=10 {
         let params = SearchParams::with_depth(depth);
         let start = Instant::now();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, None);
         let ms = start.elapsed().as_millis() as u64;
         let nps = if ms > 0 { result.nodes * 1000 / ms } else { 0 };
         println!("  depth {:2}: {:>8} nodes {:>5}ms {:>8} nps", depth, result.nodes, ms, nps);
@@ -180,6 +181,7 @@ fn bench_thread_scaling() {
         return;
     }
     let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
+    let pool = ThreadPool::new(4);
     println!("=== Thread Scaling (startpos, depth 8) ===");
     for threads in [1, 2, 4] {
         let mut params = SearchParams::with_depth(8);
@@ -187,7 +189,7 @@ fn bench_thread_scaling() {
         let stop = Arc::new(AtomicBool::new(false));
         let tt = Arc::new(TT::new(16));
         let start = Instant::now();
-        let result = search(&board, &params, &stop, &tt);
+        let result = search(&board, &params, &stop, &tt, Some(&pool));
         let ms = start.elapsed().as_millis() as u64;
         let nps = if ms > 0 { result.nodes * 1000 / ms } else { 0 };
         println!("  t{threads}: {:>8} nodes {:>5}ms {:>8} nps", result.nodes, ms, nps);

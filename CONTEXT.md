@@ -160,6 +160,9 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 19 | Futility pruning | ✅ DONE | **Medium** — reduces nodes near horizon | Skip quiet moves at depth ≤ 2 when static_eval + margin < alpha. Margins: 200cp@d1, 400cp@d2. |
 | 20 | Static Exchange Evaluation (SEE) | ✅ DONE | **Medium** — better capture ordering | Recursive SEE (smallest attacker first) in `src/eval.rs`. Replaces MVV-LVA in `order_moves`/`order_moves_q`; losing captures (SEE < 0) pruned in quiescence. 5 unit tests. |
 | 21 | Summary + interactive extension of positional eval | ✅ DONE | **Medium** — eval quality | Reviewed `eval.rs`, added 13 new evaluation term groups across 13 `ready-for-agent` issues. All unit + integration tests pass (86). |
+| 22 | Thread pool for search workers | ✅ DONE | **Medium** — multicore scaling | Replace per-thread spawn with a persistent thread pool |
+| 23 | Fix unsound Nxb4 sacrifice from pawn PST bias | `ready-for-agent` | **High** — eval quality | Pawn PST values over-incentivize b4 push; engine plays Nxb4 blunder |
+| 24 | Human review of positional evaluation | `needs-info` | **Medium** — eval quality | Review all eval terms; suggest improvements and new terms |
 
 ## Performance (release build, startpos, 1 thread)
 
