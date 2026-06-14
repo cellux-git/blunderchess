@@ -16,6 +16,7 @@ pub struct Engine {
     pub ponderhit_received: Arc<AtomicBool>,
     pub book: Option<Book>,
     pub own_book: bool,
+    pub threads: u8,
 }
 
 impl Engine {
@@ -31,6 +32,7 @@ impl Engine {
             ponderhit_received: Arc::new(AtomicBool::new(false)),
             book: None,
             own_book: false,
+            threads: 1,
         }
     }
 
@@ -66,7 +68,11 @@ impl Engine {
 
     fn cmd_uci(&self) {
         println!("id name BlunderChess 0.1.0");
-        println!("id author Zsolt Herpai");
+        println!("id author Cellux");
+        println!("option name MultiPV type spin default 1 min 1 max 64");
+        println!("option name OwnBook type check default false");
+        println!("option name BookFile type string default <empty>");
+        println!("option name Threads type spin default 1 min 1 max 255");
         println!("uciok");
     }
 
@@ -142,6 +148,7 @@ impl Engine {
         let mut params = SearchParams::new();
         params.multi_pv = self.multi_pv;
         params.ponder = self.pondering;
+        params.threads = self.threads;
         let mut i = 0;
         let mut wtime: Option<u64> = None;
         let mut btime: Option<u64> = None;
@@ -312,6 +319,11 @@ impl Engine {
                         i += 3;
                     } else if i + 3 < args.len() && args[i + 1] == "OwnBook" && args[i + 2] == "value" {
                         self.own_book = args[i + 3] == "true";
+                        i += 3;
+                    } else if i + 3 < args.len() && args[i + 1] == "Threads" && args[i + 2] == "value" {
+                        if let Ok(n) = args[i + 3].parse::<u8>() {
+                            self.threads = n.max(1);
+                        }
                         i += 3;
                     }
                 }
