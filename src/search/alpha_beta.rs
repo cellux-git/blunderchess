@@ -1,4 +1,5 @@
-use crate::board::{Board, GameResult, MAX_MOVES};
+use crate::board::{Board, MAX_MOVES};
+use crate::draw;
 use crate::eval::Eval;
 use crate::movegen;
 use crate::search::params::{SearchAlgorithmParams, CHECKMATE};
@@ -29,13 +30,6 @@ pub(crate) fn alpha_beta(
         return quiescence(board, alpha, beta, ply, 0, state);
     }
 
-    if let Some(result) = board.check_result() {
-        return match result {
-            GameResult::Checkmate(_) => -(CHECKMATE - ply as i32),
-            GameResult::Stalemate | GameResult::Draw => 0,
-        };
-    }
-
     let hash = board.hash();
     let tt_entry = tt.probe(hash);
     let tt_score = tt_entry.as_ref().map(|e| {
@@ -53,6 +47,8 @@ pub(crate) fn alpha_beta(
             }
         }
     }
+
+    if draw::is_terminal_draw(board) { return 0; }
 
     let hash_move = tt_entry.and_then(|e| e.best_move);
 

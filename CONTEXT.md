@@ -178,39 +178,39 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | ✅ DONE | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool no longer replaced at runtime. |
 | 29 | Extract MoveOrdering module from search.rs | ✅ DONE | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. ~55 lines removed from search.rs. |
 | 30 | Make passed_pawns a free function | ✅ DONE | **Low** — cleanup | Removed dead &self parameter. Extracted from impl Eval to standalone function in pawns.rs. |
+| 31 | Performance bottleneck investigation | `needs-triage` | **High** — 80-100% NPS target | See `.scratch/perf-bottleneck-investigation/issues/01-perf-bottleneck-analysis.md`. Identifies critical hot-path waste: `check_result()` clones board at every alpha-beta node, QS uses expensive `generate_legal_moves`, eval defaults constructed redundantly, TT cache-line contention caps Lazy SMP at 1.37×. 6 AFK vertical slices proposed. |
 
-## Performance (release build, startpos, 1 thread)
+## Performance (release build, startpos, 1 thread, shared TT)
 
 | Depth | Nodes | Time (ms) | NPS |
 |-------|-------|-----------|-----|
-| 3 | 1,159 | 4 | 290K |
-| 4 | 3,520 | 20 | 176K |
-| 5 | 25,956 | 95 | 273K |
-| 6 | 37,366 | 136 | 275K |
-| 7 | 79,409 | 255 | 311K |
-| 8 | 189,551 | 703 | 270K |
-| 9 | 458,908 | 1,690 | 271K |
-| 10 | 2,807,299 | 10,519 | 267K |
-| 11 | 11,379,412 | 44,172 | 258K |
+| 3 | 1,606 | 7 | 229K |
+| 4 | 4,311 | 28 | 154K |
+| 5 | 8,270 | 52 | 159K |
+| 6 | 43,544 | 339 | 128K |
+| 7 | 49,563 | 374 | 133K |
+| 8 | 348,997 | 2,929 | 119K |
+| 9 | 190,363 | 1,606 | 119K |
+| 10 | 2,989,937 | 26,605 | 112K |
 
-Steady ~270K NPS. Branching factor ~4.9x per ply.
+Steady ~120K NPS. Node counts wobble at depth 7-9 due to shared TT (shallower iterations fill the table, reducing deeper search work).
 
 ## Lazy SMP scaling data
 
-Release build, startpos, depth 10:
+Release build, startpos, depth 8, fresh TT per run:
 
 | Threads | Nodes | Time (ms) | vs t1 |
 |---------|-------|-----------|-------|
-| 1 | 2,807,299 | 10,509 | 1.00× |
-| 2 | 1,704,735 | 7,939 | 1.32× faster |
-| 4 | 1,275,769 | 12,567 | 0.84× slower |
+| 1 | 485,444 | 3,923 | 1.00× |
+| 2 | 331,859 | 2,857 | 1.37× faster |
+| 4 | 331,422 | 2,884 | 1.36× faster |
 
-2 threads provides a 1.32× speedup via TT sharing (39% fewer nodes). 4 threads reduces nodes to 45% but cache contention negates the benefit.
+2-4 threads provide a ~1.37× speedup at depth 8. TT sharing reduces total nodes (32% fewer with 2+ threads).
 
-Depth sweep 6–11 (pre-eval overhaul):
-| Depth | t1 (ms) | t2 (ms) | t4 (ms) | Best |
-|-------|---------|---------|---------|------|
-| 6 | 131 | 154 | 157 | t1 |
-| 9 | 1,679 | 1,613 | 2,452 | ~tie |
-| 10 | 10,554 | 9,153 | 12,295 | t2 |
-| 11 | 44,835 | 32,371 | — | t2 (1.38×) |
+## Perft speed (kiwipete, release)
+
+| Depth | Nodes | Time (ms) | NPS |
+|-------|-------|-----------|-----|
+| 1 | 48 | <1 | — |
+| 2 | 2,039 | <1 | — |
+| 3 | 97,862 | 20 | 4.9M |

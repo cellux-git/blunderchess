@@ -1,4 +1,5 @@
-use crate::board::{Board, GameResult, MAX_MOVES};
+use crate::board::{Board, MAX_MOVES};
+use crate::draw;
 use crate::eval::Eval;
 use crate::movegen;
 use crate::search::params::CHECKMATE;
@@ -9,16 +10,14 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
     state.nodes += 1;
     if state.should_stop() || ply >= MAX_DEPTH - 1 { return Eval::default().evaluate(board); }
 
-    if let Some(result) = board.check_result() {
-        return match result {
-            GameResult::Checkmate(_) => -(CHECKMATE - ply as i32),
-            GameResult::Stalemate | GameResult::Draw => 0,
-        };
-    }
+    if draw::is_terminal_draw(board) { return 0; }
 
     let stand_pat = Eval::default().evaluate(board);
-    if stand_pat >= beta { return beta; }
-    if stand_pat > alpha { alpha = stand_pat; }
+    let in_check = board.in_check();
+    if !in_check {
+        if stand_pat >= beta { return beta; }
+        if stand_pat > alpha { alpha = stand_pat; }
+    }
 
     let mut moves_buf = [crate::types::Move::NULL; MAX_MOVES];
     let move_count = movegen::generate_legal_moves(board, &mut moves_buf);
@@ -35,13 +34,15 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
             let own_king_safe = !board.is_attacked_by(king, board.side_to_move());
             let gives_check = board.in_check();
             board.unmake_move(&undo);
-            if own_king_safe && (is_cap_or_promo || gives_check) {
+            if own_king_safe && (is_cap_or_promo || gives_check || in_check) {
                 moves_buf[filtered] = mv;
                 filtered += 1;
             }
         }
     }
-    if filtered == 0 { return alpha; }
+    if filtered == 0 {
+        return if board.in_check() { -(CHECKMATE - ply as i32) } else { alpha };
+    }
     state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board);
 
     for i in 0..filtered {
