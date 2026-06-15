@@ -210,26 +210,10 @@ fn generate_king_moves(board: &Board, color: Color, moves: &mut [Move; MAX_MOVES
     }
 }
 
-pub fn mvv_lva(mv: Move, board: &Board) -> i32 {
-    let victim = board.piece_at(mv.to());
-    let attacker = board.piece_at(mv.from());
-    let v = piece_val(victim);
-    let a = piece_val(attacker);
-    v * 10 - a
-}
-
 pub fn generate_legal_vec(board: &Board) -> Vec<Move> {
     let mut buf = [Move::NULL; MAX_MOVES];
     let count = generate_legal_moves(board, &mut buf);
     buf[..count].to_vec()
-}
-
-fn piece_val(p: Option<Piece>) -> i32 {
-    match p {
-        Some(Piece::Pawn) => 1, Some(Piece::Knight) => 2, Some(Piece::Bishop) => 3,
-        Some(Piece::Rook) => 4, Some(Piece::Queen) => 5, Some(Piece::King) => 6,
-        None => 0,
-    }
 }
 
 pub fn perft(board: &Board, depth: u8) -> u64 {

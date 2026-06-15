@@ -2,6 +2,8 @@ use std::fmt;
 
 pub type Bitboard = u64;
 
+pub const MAX_DEPTH: u8 = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Square(u8);
 

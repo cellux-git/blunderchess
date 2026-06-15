@@ -1,11 +1,13 @@
 pub mod attack;
 pub mod board;
 pub mod book;
+pub mod draw;
 pub mod eval;
 pub mod move_ordering;
 pub mod movegen;
 pub mod search;
 pub mod thread_pool;
+pub mod time_control;
 pub mod tt;
 pub mod types;
 pub mod uci;

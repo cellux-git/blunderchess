@@ -1,18 +1,17 @@
-mod params;
+pub(crate) mod params;
+pub(crate) use params::Eval;
+
 mod pawns;
-use pawns::passed_pawns;
 mod kings;
 mod mobility;
 mod pieces;
 mod see;
 
-pub(crate) use params::Eval;
-
 use crate::board::Board;
 use crate::types::{Color, Piece, Square};
 
 impl Eval {
-    fn material_value(&self, piece: Piece) -> i32 {
+    pub(crate) fn material_value(&self, piece: Piece) -> i32 {
         match piece {
             Piece::Pawn => self.material.pawn_value,
             Piece::Knight => self.material.knight_value,
@@ -71,7 +70,7 @@ impl Eval {
         let enemy_bb = board.colors_bb(enemy);
         let pawns_bb = board.pieces_bb(Piece::Pawn) & us_bb;
         let enemy_pawns_bb = board.pieces_bb(Piece::Pawn) & enemy_bb;
-        let occ = board.occupancy();
+        let _occ = board.occupancy();
         let king_sq = board.king_square(color);
 
         // material + PST
@@ -90,10 +89,12 @@ impl Eval {
         }
 
         // pawn structure
-        self.eval_pawns(board, pawns_bb, enemy_pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // pawn chain / phalanx
-        self.eval_pawn_chain(pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pawns::eval_pawn_chain(&self.pawn, pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // bishop pair
         let bishops_bb = board.pieces_bb(Piece::Bishop) & us_bb;
@@ -103,52 +104,66 @@ impl Eval {
         }
 
         // bad bishops (generalized)
-        self.eval_bad_bishops(board, color, pawns_bb, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_bad_bishops(board, &self.piece, color, pawns_bb);
+        mg_score += m; eg_score += e;
 
         // rook open/semi-open files + closed file + 7th rank
-        self.eval_rooks(board, pawns_bb, enemy_pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_rooks(board, &self.piece, pawns_bb, enemy_pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // rook-queen battery
-        self.eval_rook_queen_battery(board, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_rook_queen_battery(board, &self.piece, color);
+        mg_score += m; eg_score += e;
 
         // knights: outpost + rim + trapped
-        self.eval_knights(board, color, enemy_pawns_bb, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_knights(board, &self.piece, color, enemy_pawns_bb);
+        mg_score += m; eg_score += e;
 
         // queen multi-attack
-        self.eval_queen_multiattack(board, color, enemy, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_queen_multiattack(board, &self.piece, color, enemy);
+        mg_score += m; eg_score += e;
 
         // passed pawn bonuses
-        let my_passers = passed_pawns(pawns_bb, enemy_pawns_bb, color);
-        self.eval_connected_passers(my_passers, &mut mg_score, &mut eg_score);
-        self.eval_rook_behind_passer(board, color, my_passers, &mut mg_score, &mut eg_score);
-        self.eval_king_passer_proximity(board, color, my_passers, &mut mg_score, &mut eg_score);
+        let my_passers = pawns::passed_pawns(pawns_bb, enemy_pawns_bb, color);
+        let (m, e) = pawns::eval_connected_passers(&self.king, my_passers);
+        mg_score += m; eg_score += e;
+        let (m, e) = pawns::eval_rook_behind_passer(board, &self.king, color, my_passers);
+        mg_score += m; eg_score += e;
+        let (m, e) = kings::eval_king_passer_proximity(board, &self.king, color, my_passers);
+        mg_score += m; eg_score += e;
 
         // candidate passer
-        self.eval_candidate_passers(board, pawns_bb, enemy_pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pawns::eval_candidate_passers(&self.pawn, board, pawns_bb, enemy_pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // passer blocker
-        self.eval_passer_blocker(board, pawns_bb, enemy_pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pawns::eval_passer_blocker(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // mobility
-        let (mobility_mg, mobility_eg) = self.eval_mobility(board, color, enemy, occ);
+        let (mobility_mg, mobility_eg) = mobility::eval_mobility(board, &self.mobility, color);
         mg_score += mobility_mg;
         eg_score += mobility_eg;
 
         // king safety (MG only; outer phase blend handles taper)
-        let king_safety_mg = self.eval_king_safety(board, color, king_sq, pawns_bb, enemy_bb);
+        let king_safety_mg = kings::eval_king_safety(board, &self.king, color, king_sq, pawns_bb, enemy_bb);
         mg_score += king_safety_mg;
 
         // king opposition
-        self.eval_king_opposition(board, color, &mut mg_score, &mut eg_score);
+        let (m, e) = kings::eval_king_opposition(board, &self.king, color);
+        mg_score += m; eg_score += e;
 
         // space control
-        self.eval_space(board, color, pawns_bb, enemy_pawns_bb, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_space(&self.pawn, pawns_bb, color);
+        mg_score += m; eg_score += e;
 
         // pawn majority
-        self.eval_pawn_majority(pawns_bb, enemy_pawns_bb, color, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_pawn_majority(&self.pawn, pawns_bb, enemy_pawns_bb);
+        mg_score += m; eg_score += e;
 
         // exchange evaluation
-        self.eval_exchange(board, color, pawns_bb, &mut mg_score, &mut eg_score);
+        let (m, e) = pieces::eval_exchange(board, &self.piece, color, pawns_bb);
+        mg_score += m; eg_score += e;
 
         (mg_score, eg_score)
     }
@@ -311,11 +326,10 @@ mod tests {
         assert_eq!(Eval::default().see(&board, mv), 0);
     }
 
-    // ── 26 new positional term tests ──
+    // ── 26 positional term tests ──
 
     #[test]
     fn test_isolated_pawn_penalty() {
-        // two isolated pawns (a3,c3) vs connected phalanx (a3,b3), same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/P1P5/8/K7 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/PP6/8/K7 w - -").unwrap());
         assert!(s2 > s1);
@@ -323,7 +337,6 @@ mod tests {
 
     #[test]
     fn test_backward_pawn_penalty() {
-        // e4 blocked by e5, backward without support vs supported by d3 behind on adjacent
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/4p3/4P3/8/8/K7 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/4p3/4P3/3P4/8/K7 w - -").unwrap());
         assert!(s2 > s1);
@@ -331,7 +344,6 @@ mod tests {
 
     #[test]
     fn test_pawn_phalanx_bonus() {
-        // a2+b2 phalanx vs a2+c2 spread, same count
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/PP6/K7 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/P1P5/K7 w - -").unwrap());
         assert!(s1 > s2);
@@ -339,7 +351,6 @@ mod tests {
 
     #[test]
     fn test_pawn_chain_bonus() {
-        // d3 defended by e2 (chain) vs d3+g2 (no chain)
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/3P4/4P3/K7 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/3P4/6P1/K7 w - -").unwrap());
         assert!(s1 > s2);
@@ -347,7 +358,6 @@ mod tests {
 
     #[test]
     fn test_rook_semi_open_file() {
-        // rook on semi-open b-file (only black pawn) vs open b-file, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/1p6/8/8/8/P7/8/KR6 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/p7/8/8/8/P7/8/KR6 w - -").unwrap());
         assert!(s2 > s1, "open file should score higher than semi-open");
@@ -355,7 +365,6 @@ mod tests {
 
     #[test]
     fn test_rook_closed_file_penalty() {
-        // rook on closed b-file (own pawn) vs open, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/p7/8/8/8/1P6/8/KR6 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/p7/8/8/8/P7/8/KR6 w - -").unwrap());
         assert!(s2 > s1);
@@ -370,7 +379,6 @@ mod tests {
 
     #[test]
     fn test_rook_queen_battery() {
-        // Q+R aligned on rank 1 empty between vs not aligned, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/8/KQ5R w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/Q7/K1R5 w - -").unwrap());
         assert!(s1 > s2);
@@ -392,7 +400,6 @@ mod tests {
 
     #[test]
     fn test_trapped_knight_penalty() {
-        // knight on a1 (2 safe squares) vs knight on c1 (4 safe squares), same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/8/N1K5 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/8/2N1K3 w - -").unwrap());
         assert!(s2 > s1);
@@ -407,7 +414,6 @@ mod tests {
 
     #[test]
     fn test_rook_behind_passer_bonus() {
-        // zero out rook-file bonuses so only behind-passer matters
         let mut ev = Eval::default();
         ev.piece.rook_open_file_bonus = (0, 0);
         ev.piece.rook_semi_open_file_bonus = (0, 0);
@@ -419,7 +425,6 @@ mod tests {
 
     #[test]
     fn test_passer_blocker_bonus() {
-        // knight on b1 blocks black b-pawn vs same knight not blocking
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/1p6/KN6 b - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/1p6/K1N5 b - -").unwrap());
         assert!(s1 > s2);
@@ -427,7 +432,6 @@ mod tests {
 
     #[test]
     fn test_king_passer_proximity() {
-        // bigger distance advantage = bigger bonus
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/P7/8/8/K7 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("7k/8/8/8/P7/8/8/K7 w - -").unwrap());
         assert!(s2 > s1);
@@ -435,7 +439,6 @@ mod tests {
 
     #[test]
     fn test_king_opposition_bonus() {
-        // kings in opposition, one side has knight (asymmetry so only one side gets bonus)
         let s1 = Eval::default().evaluate(&Board::from_fen("8/8/8/8/8/3k4/8/3KN3 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("8/8/8/8/8/3k4/8/4KN2 w - -").unwrap());
         assert!(s1 > s2);
@@ -443,16 +446,13 @@ mod tests {
 
     #[test]
     fn test_king_opposition_tempo_blocked() {
-        // opposition blocked when opponent has a pawn that can move
         let s1 = Eval::default().evaluate(&Board::from_fen("8/8/8/8/8/3k4/8/3KN3 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("8/8/8/8/8/3k1p2/8/3KN3 w - -").unwrap());
-        // s2 has extra pawn (+100 material) but opposition bonus blocked (~-50)
         assert!(s2 < s1 + 200);
     }
 
     #[test]
     fn test_space_bonus() {
-        // exaggerated space bonus to overcome PST differences between ranks
         let mut ev = Eval::default();
         ev.pawn.space_bonus = (300, 300);
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/2P1P3/8/8/K7 w - -").unwrap());
@@ -469,7 +469,6 @@ mod tests {
 
     #[test]
     fn test_bad_bishop_penalty() {
-        // light-sq bishop behind light-sq pawns vs dark-sq bishop, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/2P5/1P6/K1B5 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/2P5/1P6/K5B1 w - -").unwrap());
         assert!(s2 > s1);
@@ -477,7 +476,6 @@ mod tests {
 
     #[test]
     fn test_queen_attack_count_bonus() {
-        // same position, different count bonus → higher bonus = higher score
         let fen = "k7/3b4/8/8/8/8/3r4/K2Q4 w - -";
         let board = Board::from_fen(fen).unwrap();
         let mut ev = Eval::default();
@@ -490,7 +488,6 @@ mod tests {
 
     #[test]
     fn test_queen_fork_bonus() {
-        // custom: big fork bonus, zero count. Fork: 2 undefended pieces attacked by Q.
         let mut ev = Eval::default();
         ev.piece.queen_fork_bonus = (300, 300);
         ev.piece.queen_attack_count_bonus = [0; 8];
@@ -508,7 +505,6 @@ mod tests {
 
     #[test]
     fn test_bishop_mobility() {
-        // bishop open diagonal vs bishop blocked by own pawn, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/P7/K2B4 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/2P5/K2B4 w - -").unwrap());
         assert!(s1 > s2);
@@ -516,7 +512,6 @@ mod tests {
 
     #[test]
     fn test_rook_mobility() {
-        // same material (K+R+1P), rook on b1: open file vs blocked by own pawn
         let mut ev = Eval::default();
         ev.pst.mg_pawn_table = [0; 64]; ev.pst.eg_pawn_table = [0; 64];
         ev.pst.mg_rook_table = [0; 64]; ev.pst.eg_rook_table = [0; 64];
@@ -527,8 +522,6 @@ mod tests {
         ev.pawn.passed_pawn_bonus = [0; 8];
         ev.mobility.rook_mobility = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
         ev.mobility.rook_mobility_eg = [-100, -80, -40, 0, 30, 50, 60, 65, 68, 70, 71, 71, 72, 72, 72];
-        // s1: R b1, P a3 → b-file open, mobility ~13
-        // s2: R b1, P b3 → b-file blocked, mobility ~7
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/P7/8/KR6 w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/1P6/8/KR6 w - -").unwrap());
         assert!(s1 > s2);
@@ -543,7 +536,6 @@ mod tests {
 
     #[test]
     fn test_exchange_open_files() {
-        // RvsN, same material, open files vs closed
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/8/K1R1n3 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/2p2p2/8/K1R1n3 w - -").unwrap());
         assert!(s1 > s2);
@@ -558,7 +550,6 @@ mod tests {
 
     #[test]
     fn test_exchange_minor_activity() {
-        // RvsN, inactive enemy minor vs active, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/8/8/1n6/K1R5 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k7/8/8/8/3n4/8/8/K1R5 w - -").unwrap());
         assert!(s1 > s2);
@@ -566,7 +557,6 @@ mod tests {
 
     #[test]
     fn test_king_safety_open_file() {
-        // open file near king with enemy rook vs shielded, same material
         let s1 = Eval::default().evaluate(&Board::from_fen("k6r/8/8/8/8/8/8/4K3 w - -").unwrap());
         let s2 = Eval::default().evaluate(&Board::from_fen("k6r/8/8/8/8/8/4P3/4K3 w - -").unwrap());
         assert!(s2 > s1);
@@ -574,7 +564,6 @@ mod tests {
 
     #[test]
     fn test_king_safety_zone_attackers() {
-        // zero out PST to isolate zone-attacker penalty
         let mut ev = Eval::default();
         ev.king.king_shield_missing_penalty = 0;
         ev.king.king_open_file_penalty = 0;

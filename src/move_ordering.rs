@@ -1,8 +1,6 @@
 use crate::board::Board;
 use crate::eval::Eval;
-use crate::types::{Move, MoveKind};
-
-use crate::search::MAX_DEPTH;
+use crate::types::{Move, MoveKind, MAX_DEPTH};
 
 pub(crate) struct MoveOrdering {
     killers: [[Option<Move>; 2]; MAX_DEPTH as usize],

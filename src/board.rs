@@ -700,7 +700,6 @@ impl Board {
     pub fn check_result(&self) -> Option<GameResult> {
         let mut moves_buf = [Move::NULL; MAX_MOVES];
         let count = crate::movegen::generate_legal_moves(self, &mut moves_buf);
-        // filter out moves that leave king in check (pseudo-legal → legal)
         let side = self.side_to_move;
         let mut legal = 0;
         let mut b = self.clone();
@@ -719,57 +718,11 @@ impl Board {
             } else {
                 Some(GameResult::Stalemate)
             }
-        } else if self.is_draw_by_rule() {
+        } else if crate::draw::is_draw_by_rule(self) {
             Some(GameResult::Draw)
         } else {
             None
         }
-    }
-
-    fn is_draw_by_rule(&self) -> bool {
-        self.is_insufficient_material() || self.is_fifty_move() || self.is_threefold()
-    }
-
-    fn is_insufficient_material(&self) -> bool {
-        let mut pieces: Vec<(Piece, Color)> = Vec::new();
-        for i in 0..64 {
-            if let Some(p) = self.squares[i] {
-                if p != Piece::King {
-                    pieces.push((p, self.colors[i].unwrap()));
-                }
-            }
-        }
-        match pieces.len() {
-            0 => true,
-            1 => { let (p, _) = pieces[0]; p == Piece::Bishop || p == Piece::Knight }
-            2 => {
-                let (p1, c1) = pieces[0]; let (p2, c2) = pieces[1];
-                if c1 != c2 { return false; }
-                p1 == Piece::Bishop && p2 == Piece::Bishop
-                    && self.bishop_square_color(p1, c1) == self.bishop_square_color(p2, c2)
-            }
-            _ => false,
-        }
-    }
-
-    fn bishop_square_color(&self, piece: Piece, color: Color) -> usize {
-        for i in 0..64 {
-            if self.squares[i] == Some(piece) && self.colors[i] == Some(color) {
-                let sq = Square::new(i as u8).unwrap();
-                return ((sq.file() + sq.rank()) % 2) as usize;
-            }
-        }
-        0
-    }
-
-    fn is_fifty_move(&self) -> bool { self.halfmove_clock >= 100 }
-
-    fn is_threefold(&self) -> bool {
-        let mut count = 0u8;
-        for &h in &self.history {
-            if h == self.hash { count += 1; if count >= 2 { return true; } }
-        }
-        false
     }
 }
 
