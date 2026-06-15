@@ -4,15 +4,62 @@ A UCI chess engine written in Rust.
 
 ## Build
 
-```bash
-# Release (for play)
-cargo build --release
+### Linux (default)
 
-# Dev (debug info, faster compile)
-cargo build
+```bash
+make linux          # release build
+# Or directly:
+cargo build --release
 ```
 
-The binary is `target/release/blunderchess` (or `target/debug/blunderchess`).
+Binary: `target/release/blunderchess`
+
+### Windows (optional, via cross-compilation)
+
+Uses [`cross`](https://github.com/cross-rs/cross) and Docker to cross-compile a native Windows `.exe` from Linux.
+
+**Prerequisites (one-time):**
+
+```bash
+cargo install cross                      # cross-compilation tool
+sudo apt install docker.io               # required by cross
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER            # log out/in after
+```
+
+**Build:**
+
+```bash
+make windows
+```
+
+If you get `permission denied` on the Docker socket, either log out/in
+(to activate the `docker` group) or run:
+
+```bash
+sg docker -c "make windows"
+```
+
+Binary: `target/x86_64-pc-windows-gnu/release/blunderchess.exe`
+
+### ARM64 / Android (optional, via cross-compilation)
+
+Same prerequisites as Windows above.
+
+```bash
+make arm
+```
+
+Binary: `target/aarch64-unknown-linux-gnu/release/blunderchess`
+
+Runs on ARM64 Linux (Raspberry Pi 4/5, AWS Graviton) and on Android via
+[Termux](https://termux.dev) (Snapdragon Elite, MediaTek Dimensity, etc.).
+
+### Dev build
+
+```bash
+cargo build                              # debug, faster compile
+```
 
 ## Test
 
