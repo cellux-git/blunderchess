@@ -1,4 +1,4 @@
-.PHONY: linux windows arm clean test cross-check
+.PHONY: linux windows arm android-arm64 clean test cross-check
 
 CROSS := $(shell command -v cross 2>/dev/null)
 
@@ -25,6 +25,16 @@ arm: cross-check
 		echo "ERROR: Cannot access Docker. Run: newgrp docker"; exit 1; \
 	fi
 	@echo "Done: target/aarch64-unknown-linux-gnu/release/blunderchess"
+
+android-arm64: cross-check
+	@if docker ps >/dev/null 2>&1; then \
+		cross build --release --target aarch64-linux-android; \
+	elif sg docker -c 'true' 2>/dev/null; then \
+		sg docker -c 'cross build --release --target aarch64-linux-android'; \
+	else \
+		echo "ERROR: Cannot access Docker. Run: newgrp docker"; exit 1; \
+	fi
+	@echo "Done: target/aarch64-linux-android/release/blunderchess"
 
 cross-check:
 	@if [ -z "$(CROSS)" ]; then \

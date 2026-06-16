@@ -130,7 +130,6 @@ blunderchess/
 │   └── benchmarks.rs    # Integration tests (tactical + performance benchmarks)
 ├── docs/
 │   ├── dev-environment.md
-│   ├── search-algorithm.md
 │   └── adr/
 ├── CONTEXT.md
 └── AGENTS.md

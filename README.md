@@ -42,7 +42,7 @@ sg docker -c "make windows"
 
 Binary: `target/x86_64-pc-windows-gnu/release/blunderchess.exe`
 
-### ARM64 / Android (optional, via cross-compilation)
+### ARM64 Linux (optional, via cross-compilation)
 
 Same prerequisites as Windows above.
 
@@ -54,6 +54,18 @@ Binary: `target/aarch64-unknown-linux-gnu/release/blunderchess`
 
 Runs on ARM64 Linux (Raspberry Pi 4/5, AWS Graviton) and on Android via
 [Termux](https://termux.dev) (Snapdragon Elite, MediaTek Dimensity, etc.).
+
+### Android ARM64 (optional, via cross-compilation)
+
+Same prerequisites as Windows above.
+
+```bash
+make android-arm64
+```
+
+Binary: `target/aarch64-linux-android/release/blunderchess`
+
+Native Android binary (NDK). No Termux needed — runs directly on Android devices.
 
 ### Dev build
 
