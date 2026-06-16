@@ -1,5 +1,7 @@
 # 05 — Unify SEE piece values with Eval
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

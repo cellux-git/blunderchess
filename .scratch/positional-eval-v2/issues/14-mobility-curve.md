@@ -1,5 +1,7 @@
 # 14 — Logarithmic mobility tables
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

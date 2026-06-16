@@ -1,5 +1,7 @@
 # 01 — Replace Eval::default() with static reference
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

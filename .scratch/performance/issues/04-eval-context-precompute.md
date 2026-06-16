@@ -1,5 +1,7 @@
 # 04 — Pre-compute split piece bitboards in evaluate()
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

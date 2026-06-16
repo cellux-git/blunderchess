@@ -1,5 +1,7 @@
 # 01 — Encapsulate Board internals
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

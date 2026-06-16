@@ -197,6 +197,40 @@ fn bench_thread_scaling() {
 }
 
 #[test]
+fn tactical_avoid_pawn_fork() {
+    let fen = "r3k2r/pp2qpp1/2n1b2p/2Ppp3/8/2PBP3/P1P2PPP/1R2QKNR w kq - 2 13";
+    let mut avoided = false;
+    for depth in 4..=7 {
+        let result = search_position(fen, depth);
+        let best = result.best_move.map(|m| format!("{m}")).unwrap_or_default();
+        if best != "g1f3" {
+            avoided = true;
+            break;
+        }
+    }
+    assert!(avoided, "Engine should avoid Nf3 (walks into e4 pawn fork) by depth 7");
+}
+
+#[test]
+fn tactical_avoid_queen_trap() {
+    let fen = "rnb1k2r/pp2pp1p/3p1np1/3P4/2B1P3/2qQ1N2/P1P2PPP/R1B2RK1 b kq - 1 10";
+    let mut reasonable = false;
+    for depth in 4..=7 {
+        let result = search_position(fen, depth);
+        let score = result.score;
+        let best = result.best_move.map(|m| format!("{m}")).unwrap_or_default();
+        // Qxa1 can be playable (queen for two rooks), but score must not indicate a huge blunder
+        if best == "c3a1" {
+            assert!(score.abs() < 200, "Qxa1 at depth {depth}: score {score} indicates blunder");
+        }
+        if score > -200 {
+            reasonable = true;
+        }
+    }
+    assert!(reasonable, "Engine score should be reasonable (not catastrophic) in queen trap position");
+}
+
+#[test]
 #[ignore]
 fn bench_perft_speed() {
     use blunderchess::movegen::perft;

@@ -1,5 +1,7 @@
 # 12 — Pawn majority on a wing
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

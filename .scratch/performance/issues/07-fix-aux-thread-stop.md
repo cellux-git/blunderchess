@@ -1,5 +1,7 @@
 # 07 — Fix auxiliary thread stop signal in Lazy SMP
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `bug`
 

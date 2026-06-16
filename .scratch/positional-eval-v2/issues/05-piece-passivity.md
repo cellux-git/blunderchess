@@ -1,5 +1,7 @@
 # 05 — Piece role evaluation
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

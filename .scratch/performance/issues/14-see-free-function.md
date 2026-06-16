@@ -1,5 +1,7 @@
 # 14 — Decouple SEE from Eval entirely (hot-path optimization)
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

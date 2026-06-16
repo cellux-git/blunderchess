@@ -1,5 +1,7 @@
 # 08 — Candidate passer detection
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

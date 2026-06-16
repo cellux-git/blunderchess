@@ -1,5 +1,7 @@
 # 12 — Pre-allocate excluded_moves Vec in SearchState
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

@@ -1,5 +1,7 @@
 # 06 — Move geometry helpers to attack.rs
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

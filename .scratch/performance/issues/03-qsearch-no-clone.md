@@ -1,5 +1,7 @@
 # 03 — Remove Board clone from quiescence move generation
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

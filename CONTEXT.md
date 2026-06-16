@@ -28,9 +28,9 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 
 **Zobrist hash**: A 64-bit hash of a board position, computed by XORing pre-generated random keys for each (piece, color, square) combination, plus side-to-move, castling rights, and en passant file. Updated incrementally during make_move. Generated at compile time via a const-fn LCG.
 
-**Piece-Square Table (PST)**: A static 64-square bonus/malus per piece type. Uses PeSTO's published tables with tapered evaluation (midgame/endgame blending based on material phase). EG king table uses a centralized pattern rewarding king centralization in endgames.
+**Piece-Square Table (PST)**: A static 64-square bonus/malus per piece type. Encodes the **development principle**: pieces on central, advanced squares score higher; pieces on starting squares score lower. The pawn PST gradient must be smooth enough that passive pawn pushes don't overwhelm piece development. Uses PeSTO's published tables with tapered evaluation (midgame/endgame blending based on material phase). EG king table uses a centralized pattern rewarding king centralization in endgames. Row 2 of mg_pawn_table was moderated (from max 65 to max 35) to prevent aggressive pawn advancement from dominating development moves.
 
-**Mobility**: The number of safe squares a piece can move to. Evaluated via logarithmic tables (diminishing returns per additional square) with separate MG and EG tables. All pieces count enemy-occupied squares as mobile.
+**Mobility**: The number of safe squares a piece can move to. Evaluated via logarithmic tables (diminishing returns per additional square) with separate MG and EG tables. Safe = not occupied by friendly piece AND not attacked by enemy pawn. This is a principle: piece activity matters, not which specific squares are attacked.
 
 **Bad bishop**: A bishop blocked behind its own same-color pawn chain, with low mobility. Penalized per blocking pawn, with extra penalty if the blocking pawn is fixed (cannot advance). Distinct from "trapped bishop" (old term, now subsumed).
 
@@ -43,6 +43,10 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 **Queen multi-attack**: Queen attacking multiple enemy pieces simultaneously. Two components: per-piece attack count bonus and fork detection (attacking 2+ undefended pieces).
 
 **Knight passivity**: Penalty for knights on the rim (a/h-file) or trapped (zero safe squares).
+
+**Knight outpost**: A knight in the enemy half on a square unreachable by enemy pawns, defended by a friendly pawn. Bonused. The defense requirement is strict — the defending pawn must actually attack the knight's square, not just exist on an adjacent file.
+
+**Evaluation philosophy**: Evaluation uses a handful of generic, principled terms (mobility, king safety, pawn structure, outpost, etc.) rather than many specific rules. When a position is misevaluated, the response is to tighten the relevant principle, not add a new term. See ADR-0010.
 
 **Pawn chain**: Two connected defended pawns. A phalanx (side by side on same rank) and a chain (diagonally defended) both receive bonuses.
 
@@ -132,14 +136,14 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 ## Test coverage
 
-132 tests across 12 modules (122 unit + 10 integration; all pass):
+136 tests across 12 modules (126 unit + 10 integration; all pass):
 
 | Module | Count | Key areas tested |
 |--------|-------|-----------------|
 | `board.rs` | 14 | Magic tables (exhaustive), make/unmake roundtrip, FEN parsing, castling rights, check/checkmate/stalemate, clone independence |
 | `movegen.rs` | 14 | 6 CPW perft positions (d1-3), pinned pieces, en passant discovery, castling through check, double check, promotion underpromotion, stalemate |
-| `search.rs` | 13 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke |
-| `eval.rs` | 11 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights + rim/trapped, connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend |
+| `search.rs` | 15 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke, Bb4+ knight trap avoidance, passive f7f6 avoidance |
+| `eval.rs` | 13 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights (+rim/trapped, +requires pawn defense), connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend, development-vs-passive-pawn-push |
 | `tt.rs` | 5 | Probe/store roundtrip, misses, depth-preferred replacement, age-based, move pack |
 | `types.rs` | 13 | Move packing (all kinds), Square bounds, Color flip, Move::NULL, CastlingRights |
 | `uci.rs` | 6 | Parse UCI move roundtrip, position startpos/FEN/moves, go depth, invalid input |
@@ -178,7 +182,8 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | ✅ DONE | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool no longer replaced at runtime. |
 | 29 | Extract MoveOrdering module from search.rs | ✅ DONE | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. ~55 lines removed from search.rs. |
 | 30 | Make passed_pawns a free function | ✅ DONE | **Low** — cleanup | Removed dead &self parameter. Extracted from impl Eval to standalone function in pawns.rs. |
-| 31 | Performance bottleneck investigation | `needs-triage` | **High** — 80-100% NPS target | See `.scratch/perf-bottleneck-investigation/issues/01-perf-bottleneck-analysis.md`. Identifies critical hot-path waste: `check_result()` clones board at every alpha-beta node, QS uses expensive `generate_legal_moves`, eval defaults constructed redundantly, TT cache-line contention caps Lazy SMP at 1.37×. 6 AFK vertical slices proposed. |
+| 31 | Performance bottleneck investigation | ✅ DONE | **High** — 80-100% NPS target | See `.scratch/perf-bottleneck-investigation/issues/01-perf-bottleneck-analysis.md`. Identifies critical hot-path waste: `check_result()` clones board at every alpha-beta node, QS uses expensive `generate_legal_moves`, eval defaults constructed redundantly, TT cache-line contention caps Lazy SMP at 1.37×. 6 AFK vertical slices proposed. |
+| 32 | PST positional overcompensation | ✅ DONE | **High** — eval quality | Material scaling in `src/eval/mod.rs` (`scale_positional`): when a side is down ≥200 cp, positional terms scaled by `200/(200+deficit)`. Eval after a4b5 f6e5 went from +92 → −77. Test: `test_a4b5_detected_as_material_loss`. PST tables also moderated (mg_pawn_table rows 2-4, mg_bishop_table rows 0/1/6/7). |
 
 ## Performance (release build, startpos, 1 thread, shared TT)
 

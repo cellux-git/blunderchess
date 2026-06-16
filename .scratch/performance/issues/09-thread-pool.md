@@ -1,5 +1,7 @@
 # 09 — Thread pool for search workers
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

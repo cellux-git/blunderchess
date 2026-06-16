@@ -1,6 +1,9 @@
 # Positional Evaluation v2
 
-**Status**: `ready-for-agent`
+**Status:** `completed`
+
+
+**Status:** `completed`
 
 ## Goal
 

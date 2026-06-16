@@ -1,5 +1,7 @@
 # 05 — Fast-path attack table access without branch
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

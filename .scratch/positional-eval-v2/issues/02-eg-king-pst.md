@@ -1,5 +1,7 @@
 # 02 — Endgame king PST (centralization)
 
+**Status:** `completed`
+
 **Status**: `completed`
 
 ## Current state

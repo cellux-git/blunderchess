@@ -1,5 +1,7 @@
 # 02 — Eliminate heap allocation in order_moves
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

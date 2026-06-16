@@ -1,5 +1,7 @@
 # 06 — game_phase() use bitboard popcount instead of piece_list iteration
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

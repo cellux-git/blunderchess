@@ -1,5 +1,7 @@
 # 13 — Exchange evaluation
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

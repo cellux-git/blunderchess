@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::eval::params::{PieceEval, PawnEval};
 use crate::types::{Color, Piece, Square};
-use crate::attack::{file_mask, adjacent_files_mask};
+use crate::attack::file_mask;
 
 pub(crate) fn eval_rooks(board: &Board, piece: &PieceEval, pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> (i32, i32) {
     let mut mg = 0i32;
@@ -142,8 +142,8 @@ pub(crate) fn eval_knights(board: &Board, piece: &PieceEval, color: Color, enemy
 
         let enemy_attacks = crate::attack::pawn_attacks(sq, color);
         if in_enemy_half && (enemy_attacks & enemy_pawns_bb == 0) {
-            let adj = adjacent_files_mask(file) & !(1u64 << sq_idx);
-            if adj & my_pawns != 0 {
+            let friendly_defenders = crate::attack::pawn_attacks(sq, color.flip());
+            if friendly_defenders & my_pawns != 0 {
                 mg += piece.outpost_knight_bonus.0;
                 eg += piece.outpost_knight_bonus.1;
             }
@@ -211,7 +211,7 @@ pub(crate) fn eval_rook_queen_battery(board: &Board, piece: &PieceEval, color: C
             let enemy_pawns = board.pieces_bb(Piece::Pawn) & board.colors_bb(color.flip()) & between;
             let blocked = between & board.occupancy();
 
-            let multiplier = if blocked == 0 { 3 } else if our_pawns == 0 && enemy_pawns == 0 { 2 } else if blocked.count_ones() == 1 { 1 } else { 0 };
+            let multiplier = if blocked == 0 { 2 } else if our_pawns == 0 && enemy_pawns == 0 { 1 } else { 0 };
             if multiplier > 0 {
                 mg += piece.rook_queen_battery_bonus.0 * multiplier;
                 eg += piece.rook_queen_battery_bonus.1 * multiplier;

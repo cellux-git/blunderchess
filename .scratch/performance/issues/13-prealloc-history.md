@@ -1,5 +1,7 @@
 # 13 — Pre-allocate Board history capacity
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

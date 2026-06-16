@@ -1,5 +1,7 @@
 # 11 — Make passed_pawns a free function (remove dead &self)
 
+**Status:** `completed`
+
 **Category:** improvement
 ****Status:** completed
 

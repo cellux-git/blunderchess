@@ -1,5 +1,7 @@
 # 11 — Replace piece_list Vec with fixed-size array
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

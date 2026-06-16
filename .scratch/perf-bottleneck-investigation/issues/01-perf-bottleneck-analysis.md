@@ -1,6 +1,6 @@
 # Performance bottleneck analysis
 
-Status: `ready-for-agent`
+Status: `completed`
 Category: `enhancement`
 
 ## Summary

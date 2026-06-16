@@ -1,5 +1,7 @@
 # 06 — Bug fixes: mobility consistency + king-passer MG
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `bug`
 

@@ -1,5 +1,7 @@
 # 09 — Encapsulate Engine: private fields, fix ThreadPool lifecycle
 
+**Status:** `completed`
+
 **Category:** improvement
 ****Status:** completed
 **ADR:** docs/adr/0009-engine-facade.md

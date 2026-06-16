@@ -1,5 +1,9 @@
 # 08 — Pad TT entries to prevent false sharing
 
+**Status:** `completed`
+
+
+**Status:** `completed`
 **Status**: `wontfix`
 **Category**: `enhancement`
 

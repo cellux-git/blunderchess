@@ -1,5 +1,7 @@
 # 03 — Eliminate the DEFAULT_EVAL global
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

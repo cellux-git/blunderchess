@@ -1,5 +1,7 @@
 # 02 — Split eval.rs into sub-modules
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

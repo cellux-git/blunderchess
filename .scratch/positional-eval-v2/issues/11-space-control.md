@@ -1,5 +1,7 @@
 # 11 — Space / center control
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

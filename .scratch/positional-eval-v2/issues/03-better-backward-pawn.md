@@ -1,5 +1,7 @@
 # 03 — Better backward pawn detection
 
+**Status:** `completed`
+
 **Status**: `completed`
 
 ## Current state

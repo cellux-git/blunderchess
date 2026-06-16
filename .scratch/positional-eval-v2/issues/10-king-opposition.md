@@ -1,5 +1,7 @@
 # 10 — King opposition in endgames
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

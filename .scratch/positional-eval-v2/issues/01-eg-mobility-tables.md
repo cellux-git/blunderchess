@@ -1,5 +1,7 @@
 # 01 — Add endgame mobility tables
 
+**Status:** `completed`
+
 **Status**: `completed`
 
 ## Current state

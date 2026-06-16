@@ -1,5 +1,7 @@
 # 07 — Pawn chain / phalanx bonus
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 

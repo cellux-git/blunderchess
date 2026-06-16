@@ -1,5 +1,7 @@
 # 08 — Extract SearchAlgorithmParams from hardcoded magic numbers
 
+**Status:** `completed`
+
 **Category:** improvement
 ****Status:** completed
 **ADR:** docs/adr/0008-search-algorithm-params.md

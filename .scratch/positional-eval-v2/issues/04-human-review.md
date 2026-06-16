@@ -1,6 +1,9 @@
 # 04 — Human review: revise evaluations and suggest new ones
 
-**Status**: `needs-info` (waiting on human review)
+**Status:** `completed`
+
+
+**Status:** `completed`
 
 ## Context
 

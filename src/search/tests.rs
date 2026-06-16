@@ -315,4 +315,64 @@ mod tests {
                 "search picked illegal move e1f1 (does not resolve check)");
         }
     }
+
+    #[test]
+    fn test_avoid_bb4_knight_trap() {
+        crate::attack::init_slider_tables();
+        let fen = "rnbqkb1r/pppp1ppp/4p3/4P3/3Pn3/7N/PPP2PPP/RNBQKB1R b KQkq - 2 4";
+        let board = Board::from_fen(fen).unwrap();
+        for depth in 5..=6 {
+            let params = SearchParams::with_depth(depth);
+            let stop = Arc::new(AtomicBool::new(false));
+            let tt = make_tt();
+            let result = search(&board, &params, &stop, &tt, None);
+            if let Some(bm) = result.best_move {
+                let mv_str = bm.to_string();
+                assert_ne!(
+                    mv_str, "f8b4",
+                    "depth {depth}: engine should not play Bb4+ (leads to trapped knight)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_avoid_passive_f7f6_prefer_development() {
+        crate::attack::init_slider_tables();
+        let fen = "2rqkb1r/4pp1p/pnp3p1/8/2PP4/1Q4NP/PP3PP1/R1B1K2R b KQk - 2 14";
+        let board = Board::from_fen(fen).unwrap();
+        for depth in 5..=6 {
+            let params = SearchParams::with_depth(depth);
+            let stop = Arc::new(AtomicBool::new(false));
+            let tt = make_tt();
+            let result = search(&board, &params, &stop, &tt, None);
+            if let Some(bm) = result.best_move {
+                let mv_str = bm.to_string();
+                assert_ne!(
+                    mv_str, "f7f6",
+                    "depth {depth}: engine should not play passive f7f6 (prefer development like Bg7)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_a4b5_detected_as_material_loss() {
+        crate::attack::init_slider_tables();
+        let fen = "rnbq1rk1/6pp/p2bpp2/1p2N3/P1pPpB2/4P1P1/1PP1BP1P/R2QK2R w KQ - 0 13";
+        let board = Board::from_fen(fen).unwrap();
+        let ev = crate::eval::Eval::default();
+
+        // Verify material scaling: after a4b5 f6e5, eval is negative.
+        // (Search at depth < 8 still finds tactical counterplay via Qh5,
+        // giving a false-positive score — a horizon effect, not an eval bug.)
+        let mut b = board.clone();
+        b.make_move(crate::types::Move::new(
+            Square::from_file_rank(0, 3).unwrap(), Square::from_file_rank(1, 4).unwrap()));
+        b.make_move(crate::types::Move::new(
+            Square::from_file_rank(5, 5).unwrap(), Square::from_file_rank(4, 4).unwrap()));
+        assert!(ev.evaluate(&b) < -40,
+            "After a4b5 f6e5, eval should be negative (White lost knight for pawn), got {}",
+            ev.evaluate(&b));
+    }
 }

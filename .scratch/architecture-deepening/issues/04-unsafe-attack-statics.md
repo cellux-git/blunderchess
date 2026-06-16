@@ -1,5 +1,7 @@
 # 04 — Replace unsafe statics in attack.rs
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `bug`
 

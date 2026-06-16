@@ -1,5 +1,7 @@
 # 10 — Extract MoveOrdering module from search.rs
 
+**Status:** `completed`
+
 **Category:** improvement
 ****Status:** completed
 

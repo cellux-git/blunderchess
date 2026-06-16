@@ -1,5 +1,7 @@
 # 09 — Passed pawn blocker bonus
 
+**Status:** `completed`
+
 **Status**: `completed`
 **Category**: `enhancement`
 
