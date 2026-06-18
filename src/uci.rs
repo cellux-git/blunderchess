@@ -18,11 +18,13 @@ pub struct Engine {
     book: Option<Book>,
     own_book: bool,
     threads: u8,
+    hash_size: usize,
 }
 
 impl Engine {
     pub fn new() -> Engine {
-        let tt = TT::new(64);
+        let hash_size = 64;
+        let tt = TT::new(hash_size);
         let default_threads = std::thread::available_parallelism()
             .map(|n| n.get().max(1))
             .unwrap_or(4);
@@ -38,6 +40,7 @@ impl Engine {
             book: None,
             own_book: false,
             threads: 1,
+            hash_size,
         }
     }
 
@@ -80,6 +83,7 @@ impl Engine {
     fn cmd_uci(&self) {
         println!("id name BlunderChess 0.1.0");
         println!("id author Cellux");
+        println!("option name Hash type spin default 64 min 1 max 65536");
         println!("option name MultiPV type spin default 1 min 1 max 64");
         println!("option name OwnBook type check default false");
         println!("option name BookFile type string default <empty>");
@@ -317,7 +321,16 @@ impl Engine {
         while i < args.len() {
             match args.get(i).copied() {
                 Some("name") => {
-                    if i + 3 < args.len() && args[i + 1] == "MultiPV" && args[i + 2] == "value" {
+                    if i + 3 < args.len() && args[i + 1] == "Hash" && args[i + 2] == "value" {
+                        if let Ok(n) = args[i + 3].parse::<usize>() {
+                            let new_size = n.max(1).min(65536);
+                            if new_size != self.hash_size {
+                                self.hash_size = new_size;
+                                self.tt = Arc::new(TT::new(new_size));
+                            }
+                        }
+                        i += 3;
+                    } else if i + 3 < args.len() && args[i + 1] == "MultiPV" && args[i + 2] == "value" {
                         if let Ok(n) = args[i + 3].parse::<u8>() {
                             self.multi_pv = n.max(1).min(64);
                         }
