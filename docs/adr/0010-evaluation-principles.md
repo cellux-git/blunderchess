@@ -25,6 +25,26 @@ The evaluation shall consist of a **handful of generic, principled terms** that 
 | Space | Territory control in the opponent's half |
 | Exchange evaluation | Rook-vs-minor-piece positional nuances |
 
+### Proposed principle: economic assignments (not yet implemented)
+
+**Status**: accepted, awaiting implementation. Test data needed.
+
+For any tactical role — attacking or defending — cheaper pieces create more favorable value gradients. A piece's effectiveness in a role scales inversely with its material cost:
+
+- **Attack quality**: attacking with a pawn is "free" — it chases any piece and risks nothing on recapture. Attacking with a knight risks exchange with a bishop. Attacking with a queen against a pawn risks the queen being chased by an even cheaper piece.
+- **Defense resilience**: a square's defense is only as reliable as its cheapest defender. A square protected solely by a high-value piece (queen, rook) is fragile because the defender can be chased away by a cheaper attacker — and when it moves, the defense collapses. If a knight or pawn were also defending, the queen could move without consequence.
+
+This applies across all piece types, not just pawn/queen extremes. Pawns receive no special dampening; existing pawn structure penalties (isolated, backward, shield gaps) already deter weakening advances — the attack-quality bonus only needs to be calibrated modestly enough not to override those.
+
+The principle was identified from a position where Qf5 was the sole defender of f7 (the weak pawn, crucial for king safety), and queen was easy to repeatedly chase away.
+
+```
+r1b1k1nr/ppp2ppp/2n5/2b1Pq2/2Bp4/1Q3N1P/PP3PP1/RNB2RK1 b kq - 0 9
+```
+
+Will need to find proper test data where engine has choice between cheap and expensive defender - or attacker.
+
+
 ### Anti-pattern: specific rules
 
 A specific rule would be: "when Black has a knight on e4, White pawns d4+e5, and Black plays Bb4+, penalize the knight." This catches exactly one position family and nothing else. Rejected.
