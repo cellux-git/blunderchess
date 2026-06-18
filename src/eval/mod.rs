@@ -47,6 +47,18 @@ impl Eval {
         let phase = board.phase();
         let max_phase = 24;
 
+        // Lazy eval: skip full positional when material imbalance is decisive
+        // (>queen+minor) and both sides have at least one non-king piece
+        let w_mat = self.material_count(board, Color::White);
+        let b_mat = self.material_count(board, Color::Black);
+        let mat_mg_diff = w_mat - b_mat;
+        let w_non_king = board.colors_bb(Color::White) & !board.pieces_bb(Piece::King);
+        let b_non_king = board.colors_bb(Color::Black) & !board.pieces_bb(Piece::King);
+        if mat_mg_diff.abs() > 1200 && w_non_king != 0 && b_non_king != 0 {
+            let lazy_score = mat_mg_diff;
+            return if board.side_to_move() == Color::White { lazy_score } else { -lazy_score };
+        }
+
         let (w_mat_mg, w_pos_mg, w_mat_eg, w_pos_eg) = self.evaluate_side(board, Color::White);
         let (b_mat_mg, b_pos_mg, b_mat_eg, b_pos_eg) = self.evaluate_side(board, Color::Black);
 
@@ -66,6 +78,15 @@ impl Eval {
         let score = (mg * phase + eg * (max_phase - phase)) / max_phase;
 
         if board.side_to_move() == Color::White { score } else { -score }
+    }
+
+    fn material_count(&self, board: &Board, color: Color) -> i32 {
+        let us_bb = board.colors_bb(color);
+        self.material.pawn_value * (board.pieces_bb(Piece::Pawn) & us_bb).count_ones() as i32
+            + self.material.knight_value * (board.pieces_bb(Piece::Knight) & us_bb).count_ones() as i32
+            + self.material.bishop_value * (board.pieces_bb(Piece::Bishop) & us_bb).count_ones() as i32
+            + self.material.rook_value * (board.pieces_bb(Piece::Rook) & us_bb).count_ones() as i32
+            + self.material.queen_value * (board.pieces_bb(Piece::Queen) & us_bb).count_ones() as i32
     }
 
     fn evaluate_side(&self, board: &Board, color: Color) -> (i32, i32, i32, i32) {

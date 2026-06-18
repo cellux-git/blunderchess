@@ -17,7 +17,7 @@ Add a `SearchAlgorithmParams` struct with nested sub-structs for each search heu
 - **AspirationConfig** — `initial_delta: i32`, `depth_threshold: u8`
 - **FutilityConfig** — `max_depth: u8`, `margin_d1: i32`, `margin_d2: i32`
 
-Plus a few top-level fields: `soft_time_ratio: f64`, `check_extend_qs_depth: u8`.
+Plus top-level fields for heuristics that don't warrant their own sub-struct: `razor_margin: i32` (razor pruning threshold), `soft_time_divisor: u64`.
 
 `SearchAlgorithmParams` implements `Default` with the current hardcoded values. It is passed alongside `SearchParams` into `search()` and threaded through to `search_worker()` and `alpha_beta()`.
 

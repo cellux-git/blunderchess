@@ -162,6 +162,16 @@ impl TT {
         ((hash as usize) & self.entries_mask) * PADDED_U64S
     }
 
+    pub fn prefetch(&self, hash: u64) {
+        let base = self.bucket_base(hash);
+        let ptr = unsafe { self.table.ptr.add(base) };
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::asm;
+            asm!("prefetchnta ({})", in(reg) ptr, options(att_syntax));
+        }
+    }
+
     #[inline]
     fn slot_offset(&self, base: usize, slot: usize) -> usize {
         base + slot * SLOT_U64S

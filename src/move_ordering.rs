@@ -21,14 +21,6 @@ impl MoveOrdering {
         self.history[mv.from().index() as usize][mv.to().index() as usize]
     }
 
-    fn decay_history(&mut self) {
-        for row in self.history.iter_mut() {
-            for v in row.iter_mut() {
-                *v /= 2;
-            }
-        }
-    }
-
     pub(crate) fn order_moves(
         &self, moves: &mut [Move], board: &Board, hash_move: Option<Move>, ply: u8, thread_id: u8,
     ) {
@@ -95,10 +87,8 @@ impl MoveOrdering {
         let from = mv.from().index() as usize;
         let to = mv.to().index() as usize;
         let bonus = (depth as i32) * (depth as i32);
-        self.history[from][to] += bonus;
-        if self.history[from][to] > HISTORY_MAX {
-            self.decay_history();
-        }
+        let new_val = self.history[from][to].saturating_add(bonus);
+        self.history[from][to] = if new_val > HISTORY_MAX { HISTORY_MAX } else { new_val };
     }
 }
 

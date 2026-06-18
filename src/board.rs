@@ -657,8 +657,10 @@ impl Board {
         self.side_to_move = color.flip();
 
         self.phase = self.compute_phase();
-        self.pinned[Color::White.index()] = self.compute_pinned_impl(Color::White);
-        self.pinned[Color::Black.index()] = self.compute_pinned_impl(Color::Black);
+        if piece == Piece::King || (from.bit() & self.pinned[color.index()]) != 0 {
+            self.pinned[color.index()] = self.compute_pinned_impl(color);
+        }
+        self.pinned[color.flip().index()] = self.compute_pinned_impl(color.flip());
 
         undo
     }

@@ -27,10 +27,11 @@ pub(crate) fn alpha_beta(
     state.pv_length[ply as usize] = ply as usize;
 
     if state.should_stop() || depth == 0 {
-        return quiescence(board, alpha, beta, ply, 0, state);
+        return quiescence(board, alpha, beta, ply, 0, state, tt);
     }
 
     let hash = board.hash();
+    tt.prefetch(hash);
     let tt_entry = tt.probe(hash);
     let tt_score = tt_entry.as_ref().map(|e| {
         if e.score.abs() >= CHECKMATE - 100 {
@@ -50,7 +51,13 @@ pub(crate) fn alpha_beta(
 
     if draw::is_terminal_draw(board) { return 0; }
 
-    let hash_move = tt_entry.and_then(|e| e.best_move);
+    let mut hash_move = tt_entry.and_then(|e| e.best_move);
+
+    // IIR: reduced-depth search to find a good move when TT misses
+    if !is_pv && hash_move.is_none() && depth >= 4 {
+        alpha_beta(board, alpha, beta, depth - 2, ply, state, tt, false, thread_id, alg);
+        hash_move = tt.probe(hash).and_then(|e| e.best_move);
+    }
 
     let can_null_move = !is_pv && depth >= alg.null_move.min_depth && ply > 0 && !board.in_check();
     let non_pawn_king = board.occupancy()
@@ -70,6 +77,15 @@ pub(crate) fn alpha_beta(
     }
 
     let static_eval = if depth <= alg.futility.max_depth { Some(EVAL.evaluate(board)) } else { None };
+
+    // Razor pruning: at depth 1, if eval is far below alpha, skip to QS
+    if depth == 1 && !is_pv && !board.in_check() {
+        if let Some(se) = static_eval {
+            if se + alg.razor_margin <= alpha {
+                return quiescence(board, alpha, beta, ply, 0, state, tt);
+            }
+        }
+    }
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let mut move_count: usize = 0;

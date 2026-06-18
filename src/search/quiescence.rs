@@ -4,19 +4,45 @@ use crate::eval::EVAL;
 use crate::movegen;
 use crate::search::params::CHECKMATE;
 use crate::search::worker::SearchState;
+use crate::tt::{NodeType, TT};
 use crate::types::{Move, MoveKind, Piece, MAX_DEPTH};
+use std::sync::Arc;
 
-pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState) -> i32 {
+pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState, tt: &Arc<TT>) -> i32 {
     state.nodes += 1;
     if state.should_stop() || ply >= MAX_DEPTH - 1 { return EVAL.evaluate(board); }
+
+    let hash = board.hash();
+    let tt_entry = tt.probe(hash);
+    let tt_score = tt_entry.as_ref().map(|e| {
+        if e.score.abs() >= CHECKMATE - 100 {
+            if e.score > 0 { e.score - ply as i32 } else { e.score + ply as i32 }
+        } else { e.score }
+    });
+
+    if let Some(ref entry) = tt_entry {
+        {
+            match entry.node_type {
+                NodeType::Exact => return tt_score.unwrap(),
+                NodeType::LowerBound => { if tt_score.unwrap() >= beta { return tt_score.unwrap(); } }
+                NodeType::UpperBound => { if tt_score.unwrap() <= alpha { return tt_score.unwrap(); } }
+            }
+        }
+    }
 
     if draw::is_terminal_draw(board) { return 0; }
 
     let stand_pat = EVAL.evaluate(board);
     let in_check = board.in_check();
     if !in_check {
-        if stand_pat >= beta { return beta; }
+        if stand_pat >= beta {
+            tt.store(hash, beta, 0, NodeType::LowerBound, None);
+            return beta;
+        }
         if stand_pat > alpha { alpha = stand_pat; }
+        if stand_pat + 900 <= alpha {
+            return alpha;
+        }
     }
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
@@ -64,9 +90,14 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
     }
 
     if filtered == 0 {
-        return if board.in_check() { -(CHECKMATE - ply as i32) } else { alpha };
+        let score = if board.in_check() { -(CHECKMATE - ply as i32) } else { alpha };
+        tt.store(hash, score, 0, NodeType::Exact, None);
+        return score;
     }
     state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board);
+
+    let mut best_score = -(CHECKMATE + 200);
+    let mut node_type = NodeType::UpperBound;
 
     for i in 0..filtered {
         let mv = moves_buf[i];
@@ -76,11 +107,21 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
             board.unmake_move(&undo);
             continue;
         }
-        let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state);
+        let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state, tt);
         board.unmake_move(&undo);
-        if score >= beta { return beta; }
-        if score > alpha { alpha = score; }
+        if score > best_score { best_score = score; }
+        if score >= beta {
+            tt.store(hash, beta, 0, NodeType::LowerBound, None);
+            return beta;
+        }
+        if score > alpha {
+            alpha = score;
+            node_type = NodeType::Exact;
+        }
         if state.should_stop() { break; }
+    }
+    if node_type == NodeType::Exact {
+        tt.store(hash, best_score, 0, node_type, None);
     }
     alpha
 }

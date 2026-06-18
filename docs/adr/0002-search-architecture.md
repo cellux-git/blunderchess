@@ -8,20 +8,21 @@ A chess engine's search algorithm explores the game tree to find the best move. 
 
 ## Decision
 
-The v1 search is **alpha-beta with Principal Variation Search (PVS), iterative deepening, a transposition table, quiescence search (captures only, stand-pat), and null move pruning**. Mate scores are ply-adjusted. The principal variation is collected via a triangular PV array.
+The v1 search is **alpha-beta with Principal Variation Search (PVS), iterative deepening, a transposition table, quiescence search (captures only, with stand-pat, SEE pruning, delta pruning, and TT probing/storing), null move pruning, and Internal Iterative Deepening (IIR)**. Mate scores are ply-adjusted. The principal variation is collected via a triangular PV array.
 
 ## Why
 
 - Alpha-beta is the universal foundation. Every chess engine uses it. Adding PVS (full-window on first move, null-window on rest) is a 10-line refinement that yields 20-40% fewer nodes.
 - Iterative deepening solves time management naturally (search until the time budget expires, use the last completed iteration's result) and improves move ordering for deeper searches (shallower results seed the TT).
 - A transposition table is necessary for iterative deepening to be effective — without it, each iteration restarts from scratch. The TT also caches results across different move orders reaching the same position.
-- Quiescence search prevents the "horizon effect" (mis-evaluating positions where a capture is pending just beyond the search horizon). Captures-only with stand-pat is the standard minimum.
+- Quiescence search prevents the "horizon effect" (mis-evaluating positions where a capture is pending just beyond the search horizon). Captures-only with stand-pat, SEE pruning of losing captures, delta pruning (skip when stand-pat + 900 ≤ alpha), and TT probing/storing in QS nodes are the standard advanced QS.
 - Null move pruning adds massive depth reach (~doubles effective depth) for ~15 lines and has no interaction with other heuristics in this setup.
+- IIR ensures good move ordering even on TT misses by performing a reduced-depth search first, improving cutoff rates at non-PV nodes.
 - PVS and null move pruning are bolt-on enhancements to alpha-beta, not separate algorithms. Including them in v1 avoids needing to retrofit the search loop later.
 
 ## Extension path
 
-All planned search extensions have been implemented: killer moves + history heuristic (with gravity aging), history-based Late Move Reductions (LMR), aspiration windows, pin pre-filter, futility pruning, SEE-based capture ordering with quiescence SEE pruning of losing captures, full bitboard move generation, cached phase and pinned bitboards (incremental in make/unmake), Lazy SMP multi-threading, MultiPV, ponder, and Polyglot opening book. See `CONTEXT.md` for current performance data.
+All planned search extensions have been implemented: killer moves + history heuristic (with saturation clamping), history-based Late Move Reductions (LMR), Internal Iterative Deepening (IIR), aspiration windows, pin pre-filter, futility pruning, razor pruning, lazy evaluation, SEE-based capture ordering with quiescence SEE pruning of losing captures, full bitboard move generation, cached phase and pinned bitboards (incremental in make/unmake), Lazy SMP multi-threading, MultiPV, ponder, and Polyglot opening book. See `CONTEXT.md` for current performance data.
 
 ## Considered options
 
@@ -34,5 +35,6 @@ All planned search extensions have been implemented: killer moves + history heur
 ## Consequences
 
 - The search implementation is ~300-400 lines of recursive code. Correctness depends heavily on perft-passing move generation and Zobrist correctness (every bug in either produces silent search errors).
-- TT entries must correctly encode node type (exact, lower bound, upper bound) and adjust mate scores by depth. These are standard but easy to get wrong.
-- Search speed is sufficient for depth 8-12 in typical midgame positions with 64MB TT, which is adequate for legal play and beating beginners.
+- TT entries must correctly encode node type (Exact, LowerBound, UpperBound) and adjust mate scores by depth. These are standard but easy to get wrong.
+- QS also uses the TT (probe at entry, store Exact/LowerBound on exit), with UpperBound stores skipped to reduce multi-threaded contention.
+- Search speed reaches depth 10+ in under 2 seconds (startpos, 1 thread), depth 8 in ~0.3s. 16-thread scaling approaches 10× speedup at depth 8.

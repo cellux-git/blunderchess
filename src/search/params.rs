@@ -80,6 +80,7 @@ pub struct SearchAlgorithmParams {
     pub null_move: NullMoveConfig,
     pub aspiration: AspirationConfig,
     pub futility: FutilityConfig,
+    pub razor_margin: i32,
     pub soft_time_divisor: u64,
 }
 impl Default for SearchAlgorithmParams {
@@ -89,6 +90,7 @@ impl Default for SearchAlgorithmParams {
             null_move: NullMoveConfig::default(),
             aspiration: AspirationConfig::default(),
             futility: FutilityConfig::default(),
+            razor_margin: 350,
             soft_time_divisor: 2,
         }
     }

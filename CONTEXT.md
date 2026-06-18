@@ -18,7 +18,7 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 
 **Search**: Alpha-beta with PVS, iterative deepening, quiescence search (captures only with stand-pat and SEE pruning of losing captures), null move pruning, killer moves (2 per depth), history heuristic (64×64 table with gravity aging), and history-based Late Move Reductions (LMR).
 
-**Quiescence search** ("q-search"): A restricted search that only explores captures and checks at the horizon. Uses stand-pat (return static eval if it already beats beta) and prunes losing captures (SEE < 0) to limit node explosion. When not in check, generates pseudo-legal moves and filters with trivial-legality shortcuts (same pattern as alpha-beta).
+**Quiescence search** ("q-search"): A restricted search that only explores captures and checks at the horizon. Uses stand-pat (return static eval if it already beats beta), delta pruning (skip captures when stand-pat + 900 ≤ alpha), SEE-based pruning of losing captures (SEE < 0), and transposition table probing/storing to cache QS results. When not in check, generates pseudo-legal moves and filters with trivial-legality shortcuts (same pattern as alpha-beta).
 
 **Iterative deepening**: Searching to depth 1, then 2, 3, ... until time runs out. Each completed iteration provides a result immediately; the search is interruptible via a stop flag. Enables time management.
 
@@ -154,16 +154,16 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 | Depth | Nodes | Time (ms) | NPS |
 |-------|-------|-----------|-----|
-| 3 | 4,722 | 9 | 525K |
-| 4 | 20,981 | 47 | 446K |
-| 5 | 42,034 | 74 | 568K |
-| 6 | 98,860 | 124 | 797K |
-| 7 | 145,036 | 161 | 901K |
-| 8 | 360,706 | 468 | 771K |
-| 9 | 1,068,663 | 1,354 | 789K |
-| 10 | 5,315,513 | 7,583 | 701K |
+| 3 | 4,294 | 8 | 537K |
+| 4 | 23,342 | 43 | 543K |
+| 5 | 27,111 | 39 | 695K |
+| 6 | 106,741 | 135 | 791K |
+| 7 | 265,073 | 293 | 905K |
+| 8 | 260,366 | 282 | 923K |
+| 9 | 2,134,890 | 2,442 | 874K |
+| 10 | 1,222,999 | 1,481 | 826K |
 
-Steady ~750K+ NPS at depth 6+. The bitboard movegen, cached phase/pinned, precomputed attack masks, and LMR + SEE pruning improvements combined for ~30% throughput gain and substantially fewer nodes per depth (e.g., depth-8 from 505K → 360K nodes).
+Steady ~800K+ NPS at depth 6+, peaking at 923K at depth 8. TT-in-QS, delta pruning, razor pruning, IIR, lazy eval, TT prefetch, pinned-recomputation fast-path, and history clamping contributed ~15-20% NPS gain and substantially fewer nodes at deeper depths (depth 10: 5.3M → 1.2M nodes, a 77% reduction). QS TT stores are throttled to Exact/LowerBound only, avoiding UpperBound pollution and reducing multi-threaded contention.
 
 ## Lazy SMP scaling data
 
@@ -171,23 +171,23 @@ Release build, startpos, depth 8. TT size scales 8 MB × thread count to prevent
 
 | Threads | TT (MB) | Total nodes | Time (ms) | Total NPS | vs t1 | Efficiency |
 |---------|---------|-------------|-----------|-----------|-------|------------|
-| 1 | 8 | 1,443,561 | 1,903 | 759K | 1.00× | 100% |
-| 2 | 16 | 2,314,519 | 1,610 | 1,438K | 1.89× | 95% |
-| 4 | 32 | 3,510,510 | 1,241 | 2,829K | 3.73× | 93% |
-| 8 | 64 | 4,500,685 | 936 | 4,808K | 6.34× | 79% |
-| 16 | 128 | 5,887,247 | 949 | 6,204K | 8.18× | 51% |
+| 1 | 8 | 948,159 | 1,088 | 871K | 1.00× | 100% |
+| 2 | 16 | 1,550,313 | 952 | 1,628K | 1.87× | 93% |
+| 4 | 32 | 1,740,312 | 558 | 3,119K | 3.58× | 89% |
+| 8 | 64 | 2,968,650 | 534 | 5,559K | 6.38× | 80% |
+| 16 | 128 | 5,331,304 | 579 | 9,208K | 10.57× | 66% |
 
-Scaling is near-linear through 4 threads (93%+ efficiency), remains strong at 8 (79%), then drops at 16 (51%) as cache coherence overhead on the shared TT dominates.
+QS TT stores are throttled to Exact/LowerBound entries only, reducing multi-threaded atomic contention. Combined with TT-in-QS, multi-threaded scaling improved across all thread counts (e.g., 16T NPS: 6.2M → 9.2M, +48%).
 
 ### Deep scaling (16 threads vs 1 thread by search depth)
 
 | Depth | 1T NPS | 16T NPS | Speedup | Efficiency | 1T nodes | 1T time |
 |-------|--------|---------|---------|------------|----------|---------|
-| 8 | 759K | 6,204K | 8.18× | 51% | 1.4M | 1.9s |
-| 10 | 734K | 4,676K | 6.37× | 40% | 5.8M | 7.9s |
-| 12 | 765K | 5,864K | 7.67× | 48% | 22.4M | 29.3s |
+| 8 | 923K | 9,208K | 9.97× | 62% | 0.3M | 0.3s |
+| 10 | 826K | 8,136K | 9.85× | 62% | 1.2M | 1.5s |
+| 12 | 832K | 6,128K | 7.37× | 46% | 34.6M | 41.5s |
 
-The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. Bitboard movegen, cached phase/pinned, precomputed attack masks, and history-based LMR all contribute to the per-thread throughput improvement.
+The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. TT-in-QS (Exact/LowerBound stores only), IIR, razor pruning, and delta pruning all contribute to the per-thread throughput improvement.
 
 ## Perft speed (kiwipete, release)
 
@@ -195,4 +195,4 @@ The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-
 |-------|-------|-----------|-----|
 | 1 | 48 | <1 | — |
 | 2 | 2,039 | <1 | — |
-| 3 | 97,862 | 35 | 2.8M |
+| 3 | 97,862 | 29 | 3.4M |
