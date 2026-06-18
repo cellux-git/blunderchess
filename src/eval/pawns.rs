@@ -3,10 +3,12 @@ use crate::eval::params::{KingEval, PawnEval};
 use crate::types::{Color, Piece, Square};
 use crate::attack::{file_mask, adjacent_files_mask, rank_mask_forward};
 
-pub(crate) fn eval_pawns(board: &Board, pawn: &PawnEval, pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> (i32, i32) {
+pub(crate) fn eval_pawns(board: &Board, pawn: &PawnEval, pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> (i32, i32, u64) {
+    let enemy = color.flip();
     let white_rank = |r: u8| if color == Color::White { r } else { 7 - r };
     let mut mg = 0i32;
     let mut eg = 0i32;
+    let mut passers = 0u64;
     let mut pawns = pawns_bb;
     while pawns != 0 {
         let sq_idx = pawns.trailing_zeros() as u8;
@@ -30,6 +32,7 @@ pub(crate) fn eval_pawns(board: &Board, pawn: &PawnEval, pawns_bb: u64, enemy_pa
         if ahead & enemy_pawns_bb & adjacent_files_mask(file) == 0 {
             mg += pawn.passed_pawn_bonus[fwd_rank as usize];
             eg += pawn.passed_pawn_bonus[fwd_rank as usize] * 2;
+            passers |= 1u64 << sq_idx;
         }
 
         if fwd_rank > 0 && fwd_rank < 6 {
@@ -44,9 +47,22 @@ pub(crate) fn eval_pawns(board: &Board, pawn: &PawnEval, pawns_bb: u64, enemy_pa
             }
         }
 
+        let adj = adjacent_files_mask(file);
+        let same_rank = 0xFFu64 << (rank * 8);
+        if (adj & pawns_bb & same_rank & !(1u64 << sq_idx)) != 0 {
+            mg += pawn.pawn_phalanx_bonus.0;
+            eg += pawn.pawn_phalanx_bonus.1;
+        }
+
+        let behind_sqs = crate::attack::pawn_attacks(sq, enemy);
+        if behind_sqs & pawns_bb != 0 {
+            mg += pawn.pawn_chain_bonus.0;
+            eg += pawn.pawn_chain_bonus.1;
+        }
+
         pawns &= pawns - 1;
     }
-    (mg, eg)
+    (mg, eg, passers)
 }
 
 pub(crate) fn passed_pawns(pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> u64 {
@@ -123,33 +139,6 @@ pub(crate) fn eval_rook_behind_passer(board: &Board, king: &KingEval, color: Col
                 mg -= king.rook_behind_passer_bonus.0;
                 eg -= king.rook_behind_passer_bonus.1;
             }
-        }
-    }
-    (mg, eg)
-}
-
-pub(crate) fn eval_pawn_chain(pawn: &PawnEval, pawns_bb: u64, color: Color) -> (i32, i32) {
-    let enemy = color.flip();
-    let mut mg = 0i32;
-    let mut eg = 0i32;
-    let mut pawns = pawns_bb;
-    while pawns != 0 {
-        let sq_idx = pawns.trailing_zeros() as u8;
-        pawns &= pawns - 1;
-        let file = sq_idx & 7;
-        let rank = sq_idx >> 3;
-
-        let adj = adjacent_files_mask(file);
-        let same_rank = if color == Color::White { 0xFFu64 << (rank * 8) } else { 0xFFu64 << (rank * 8) };
-        if (adj & pawns_bb & same_rank & !(1u64 << sq_idx)) != 0 {
-            mg += pawn.pawn_phalanx_bonus.0;
-            eg += pawn.pawn_phalanx_bonus.1;
-        }
-
-        let behind_sqs = crate::attack::pawn_attacks(Square::new(sq_idx).unwrap(), enemy);
-        if behind_sqs & pawns_bb != 0 {
-            mg += pawn.pawn_chain_bonus.0;
-            eg += pawn.pawn_chain_bonus.1;
         }
     }
     (mg, eg)

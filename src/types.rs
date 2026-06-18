@@ -193,24 +193,42 @@ impl fmt::Display for Move {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CastlingRights {
-    pub white_kingside: bool,
-    pub white_queenside: bool,
-    pub black_kingside: bool,
-    pub black_queenside: bool,
-}
+pub struct CastlingRights(pub u8);
 
 impl CastlingRights {
-    pub const ALL: CastlingRights = CastlingRights {
-        white_kingside: true, white_queenside: true,
-        black_kingside: true, black_queenside: true,
-    };
+    pub const WK: u8 = 1;
+    pub const WQ: u8 = 2;
+    pub const BK: u8 = 4;
+    pub const BQ: u8 = 8;
 
-    pub const NONE: CastlingRights = CastlingRights {
-        white_kingside: false, white_queenside: false,
-        black_kingside: false, black_queenside: false,
-    };
+    pub const ALL: CastlingRights = CastlingRights(Self::WK | Self::WQ | Self::BK | Self::BQ);
+    pub const NONE: CastlingRights = CastlingRights(0);
+
+    pub fn has_wk(&self) -> bool { self.0 & Self::WK != 0 }
+    pub fn has_wq(&self) -> bool { self.0 & Self::WQ != 0 }
+    pub fn has_bk(&self) -> bool { self.0 & Self::BK != 0 }
+    pub fn has_bq(&self) -> bool { self.0 & Self::BQ != 0 }
+
+    pub fn set_wk(&mut self, v: bool) { if v { self.0 |= Self::WK } else { self.0 &= !Self::WK } }
+    pub fn set_wq(&mut self, v: bool) { if v { self.0 |= Self::WQ } else { self.0 &= !Self::WQ } }
+    pub fn set_bk(&mut self, v: bool) { if v { self.0 |= Self::BK } else { self.0 &= !Self::BK } }
+    pub fn set_bq(&mut self, v: bool) { if v { self.0 |= Self::BQ } else { self.0 &= !Self::BQ } }
+
+    pub fn remove_by_mask(&mut self, mask: u8) {
+        self.0 &= !mask;
+    }
 }
+
+pub const CASTLE_LOSE_MASK: [u8; 64] = {
+    let mut m = [0u8; 64];
+    m[0] = CastlingRights::WQ;  // A1: white queenside rook
+    m[7] = CastlingRights::WK;  // H1: white kingside rook
+    m[4] = CastlingRights::WK | CastlingRights::WQ; // E1: white king
+    m[56] = CastlingRights::BQ;  // A8: black queenside rook
+    m[63] = CastlingRights::BK;  // H8: black kingside rook
+    m[60] = CastlingRights::BK | CastlingRights::BQ; // E8: black king
+    m
+};
 
 #[cfg(test)]
 mod tests {
@@ -296,29 +314,29 @@ mod tests {
     #[test]
     fn test_castling_rights_all() {
         let all = CastlingRights::ALL;
-        assert!(all.white_kingside);
-        assert!(all.white_queenside);
-        assert!(all.black_kingside);
-        assert!(all.black_queenside);
+        assert!(all.has_wk());
+        assert!(all.has_wq());
+        assert!(all.has_bk());
+        assert!(all.has_bq());
     }
 
     #[test]
     fn test_castling_rights_none() {
         let none = CastlingRights::NONE;
-        assert!(!none.white_kingside);
-        assert!(!none.white_queenside);
-        assert!(!none.black_kingside);
-        assert!(!none.black_queenside);
+        assert!(!none.has_wk());
+        assert!(!none.has_wq());
+        assert!(!none.has_bk());
+        assert!(!none.has_bq());
     }
 
     #[test]
     fn test_castling_rights_remove() {
         let mut rights = CastlingRights::ALL;
-        rights.white_kingside = false;
-        assert!(!rights.white_kingside);
-        assert!(rights.white_queenside);
-        assert!(rights.black_kingside);
-        assert!(rights.black_queenside);
+        rights.set_wk(false);
+        assert!(!rights.has_wk());
+        assert!(rights.has_wq());
+        assert!(rights.has_bk());
+        assert!(rights.has_bq());
     }
 
     #[test]

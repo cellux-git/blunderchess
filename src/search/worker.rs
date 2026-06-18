@@ -24,8 +24,10 @@ pub(crate) struct SearchState {
 impl SearchState {
     pub fn should_stop(&self) -> bool {
         if unsafe { &*self.stop }.load(AtomicOrdering::Relaxed) { return true; }
-        if let Some(limit) = self.movetime {
-            if self.start_time.elapsed().as_millis() as u64 >= limit { return true; }
+        if self.nodes & 1023 == 0 {
+            if let Some(limit) = self.movetime {
+                if self.start_time.elapsed().as_millis() as u64 >= limit { return true; }
+            }
         }
         false
     }

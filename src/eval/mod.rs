@@ -47,8 +47,6 @@ impl Eval {
         let phase = board.phase();
         let max_phase = 24;
 
-        // Lazy eval: skip full positional when material imbalance is decisive
-        // (>queen+minor) and both sides have at least one non-king piece
         let w_mat = self.material_count(board, Color::White);
         let b_mat = self.material_count(board, Color::Black);
         let mat_mg_diff = w_mat - b_mat;
@@ -59,14 +57,17 @@ impl Eval {
             return if board.side_to_move() == Color::White { lazy_score } else { -lazy_score };
         }
 
-        let (w_mat_mg, w_pos_mg, w_mat_eg, w_pos_eg) = self.evaluate_side(board, Color::White);
-        let (b_mat_mg, b_pos_mg, b_mat_eg, b_pos_eg) = self.evaluate_side(board, Color::Black);
+        let w_pawn_bb = board.pieces_bb(Piece::Pawn) & board.colors_bb(Color::White);
+        let b_pawn_bb = board.pieces_bb(Piece::Pawn) & board.colors_bb(Color::Black);
+        let w_pawn_attacks = mobility::enemy_pawn_attack_mask(w_pawn_bb, Color::White);
+        let b_pawn_attacks = mobility::enemy_pawn_attack_mask(b_pawn_bb, Color::Black);
+
+        let (w_mat_mg, w_pos_mg, w_mat_eg, w_pos_eg) = self.evaluate_side(board, Color::White, b_pawn_attacks);
+        let (b_mat_mg, b_pos_mg, b_mat_eg, b_pos_eg) = self.evaluate_side(board, Color::Black, w_pawn_attacks);
 
         let mat_diff_mg = w_mat_mg - b_mat_mg;
         let mat_diff_eg = w_mat_eg - b_mat_eg;
 
-        // Scale positional terms for the side that is behind in material.
-        // When down a knight (~320 cp), positional credit drops to ~48%.
         let w_mg = w_mat_mg + scale_positional(w_pos_mg, -mat_diff_mg);
         let b_mg = b_mat_mg + scale_positional(b_pos_mg, mat_diff_mg);
         let w_eg = w_mat_eg + scale_positional(w_pos_eg, -mat_diff_eg);
@@ -89,7 +90,7 @@ impl Eval {
             + self.material.queen_value * (board.pieces_bb(Piece::Queen) & us_bb).count_ones() as i32
     }
 
-    fn evaluate_side(&self, board: &Board, color: Color) -> (i32, i32, i32, i32) {
+    fn evaluate_side(&self, board: &Board, color: Color, enemy_pawn_attacks: u64) -> (i32, i32, i32, i32) {
         let mut mat_mg = 0i32;
         let mut mat_eg = 0i32;
         let mut pos_mg = 0i32;
@@ -100,20 +101,19 @@ impl Eval {
         let enemy_bb = board.colors_bb(enemy);
         let pawns_bb = board.pieces_bb(Piece::Pawn) & us_bb;
         let enemy_pawns_bb = board.pieces_bb(Piece::Pawn) & enemy_bb;
-        let _occ = board.occupancy();
         let king_sq = board.king_square(color);
 
-        // material + PST (from bitboards)
         macro_rules! accumulate {
             ($piece:ident, $mg_table:ident, $eg_table:ident) => {
                 let val = self.material_value(Piece::$piece);
                 let mut bb = board.pieces_bb(Piece::$piece) & us_bb;
+                let cnt = bb.count_ones() as i32;
+                mat_mg += val * cnt;
+                mat_eg += val * cnt;
                 while bb != 0 {
                     let idx = bb.trailing_zeros() as u8;
                     let sq = Square::new(idx).unwrap();
                     let (mg_pst, eg_pst) = self.pst_value(&self.pst.$mg_table, &self.pst.$eg_table, sq, color);
-                    mat_mg += val;
-                    mat_eg += val;
                     pos_mg += mg_pst;
                     pos_eg += eg_pst;
                     bb &= bb - 1;
@@ -127,43 +127,30 @@ impl Eval {
         accumulate!(Queen, mg_queen_table, eg_queen_table);
         accumulate!(King, mg_king_table, eg_king_table);
 
-        // pawn structure
-        let (m, e) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
+        let (m, e, my_passers) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        // pawn chain / phalanx
-        let (m, e) = pawns::eval_pawn_chain(&self.pawn, pawns_bb, color);
-        pos_mg += m; pos_eg += e;
-
-        // bishop pair
         let bishops_bb = board.pieces_bb(Piece::Bishop) & us_bb;
         if bishops_bb.count_ones() >= 2 {
             pos_mg += self.piece.bishop_pair_bonus.0;
             pos_eg += self.piece.bishop_pair_bonus.1;
         }
 
-        // bad bishops (generalized)
         let (m, e) = pieces::eval_bad_bishops(board, &self.piece, color, pawns_bb);
         pos_mg += m; pos_eg += e;
 
-        // rook open/semi-open files + closed file + 7th rank
         let (m, e) = pieces::eval_rooks(board, &self.piece, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        // rook-queen battery
         let (m, e) = pieces::eval_rook_queen_battery(board, &self.piece, color);
         pos_mg += m; pos_eg += e;
 
-        // knights: outpost + rim + trapped
         let (m, e) = pieces::eval_knights(board, &self.piece, color, enemy_pawns_bb);
         pos_mg += m; pos_eg += e;
 
-        // queen multi-attack
         let (m, e) = pieces::eval_queen_multiattack(board, &self.piece, color, enemy);
         pos_mg += m; pos_eg += e;
 
-        // passed pawn bonuses
-        let my_passers = pawns::passed_pawns(pawns_bb, enemy_pawns_bb, color);
         let (m, e) = pawns::eval_connected_passers(&self.king, my_passers);
         pos_mg += m; pos_eg += e;
         let (m, e) = pawns::eval_rook_behind_passer(board, &self.king, color, my_passers);
@@ -171,36 +158,28 @@ impl Eval {
         let (m, e) = kings::eval_king_passer_proximity(board, &self.king, color, my_passers);
         pos_mg += m; pos_eg += e;
 
-        // candidate passer
         let (m, e) = pawns::eval_candidate_passers(&self.pawn, board, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        // passer blocker
         let (m, e) = pawns::eval_passer_blocker(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        // mobility
-        let (mobility_mg, mobility_eg) = mobility::eval_mobility(board, &self.mobility, color, enemy_pawns_bb, enemy);
+        let (mobility_mg, mobility_eg) = mobility::eval_mobility(board, &self.mobility, color, enemy_pawn_attacks);
         pos_mg += mobility_mg;
         pos_eg += mobility_eg;
 
-        // king safety (MG only; outer phase blend handles taper)
         let king_safety_mg = kings::eval_king_safety(board, &self.king, color, king_sq, pawns_bb, enemy_bb);
         pos_mg += king_safety_mg;
 
-        // king opposition
         let (m, e) = kings::eval_king_opposition(board, &self.king, color);
         pos_mg += m; pos_eg += e;
 
-        // space control
         let (m, e) = pieces::eval_space(&self.pawn, pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        // pawn majority
         let (m, e) = pieces::eval_pawn_majority(&self.pawn, pawns_bb, enemy_pawns_bb);
         pos_mg += m; pos_eg += e;
 
-        // exchange evaluation
         let (m, e) = pieces::eval_exchange(board, &self.piece, color, pawns_bb);
         pos_mg += m; pos_eg += e;
 

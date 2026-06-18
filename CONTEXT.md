@@ -150,20 +150,18 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | `zobrist.rs` | 3 | Incremental hash matches full, hash changes after move, side-to-move toggle |
 | `tests/benchmarks.rs` | 10 | Tactical: Scholar's Mate, back-rank mate, hanging queen, promotion, smothered mate, mate-in-2, pin, discovered attack, depth convergence. 4 ignored perf benchmarks (NPS vs depth, thread scaling, deep thread scaling, perft speed). |
 
-## Performance (release build, startpos, 1 thread, shared TT)
+## Performance (release build, startpos, 1 thread, warm TT — shared across iterative deepening)
 
 | Depth | Nodes | Time (ms) | NPS |
 |-------|-------|-----------|-----|
-| 3 | 4,294 | 8 | 537K |
-| 4 | 23,342 | 43 | 543K |
-| 5 | 27,111 | 39 | 695K |
-| 6 | 106,741 | 135 | 791K |
-| 7 | 265,073 | 293 | 905K |
-| 8 | 260,366 | 282 | 923K |
-| 9 | 2,134,890 | 2,442 | 874K |
-| 10 | 1,222,999 | 1,481 | 826K |
+| 3 | 4,294 | 5 | 859K |
+| 4 | 23,342 | 25 | 934K |
+| 5 | 27,113 | 24 | 1.13M |
+| 6 | 106,739 | 103 | 1.04M |
+| 7 | 265,066 | 189 | 1.40M |
+| 8 | 260,368 | 181 | 1.44M |
 
-Steady ~800K+ NPS at depth 6+, peaking at 923K at depth 8. TT-in-QS, delta pruning, razor pruning, IIR, lazy eval, TT prefetch, pinned-recomputation fast-path, and history clamping contributed ~15-20% NPS gain and substantially fewer nodes at deeper depths (depth 10: 5.3M → 1.2M nodes, a 77% reduction). QS TT stores are throttled to Exact/LowerBound only, avoiding UpperBound pollution and reducing multi-threaded contention.
+Steady ≥1.4M NPS at depth 7+, peaking at 1.44M at depth 8. TT-in-QS, delta pruning, razor pruning, IIR, TT prefetch, pinned-recomputation fast-path, and history clamping drive efficient search with few nodes at deeper depths. QS TT stores are throttled to Exact/LowerBound only, avoiding UpperBound pollution and reducing multi-threaded contention.
 
 ## Lazy SMP scaling data
 
@@ -171,23 +169,23 @@ Release build, startpos, depth 8. TT size scales 8 MB × thread count to prevent
 
 | Threads | TT (MB) | Total nodes | Time (ms) | Total NPS | vs t1 | Efficiency |
 |---------|---------|-------------|-----------|-----------|-------|------------|
-| 1 | 8 | 948,159 | 1,088 | 871K | 1.00× | 100% |
-| 2 | 16 | 1,550,313 | 952 | 1,628K | 1.87× | 93% |
-| 4 | 32 | 1,740,312 | 558 | 3,119K | 3.58× | 89% |
-| 8 | 64 | 2,968,650 | 534 | 5,559K | 6.38× | 80% |
-| 16 | 128 | 5,331,304 | 579 | 9,208K | 10.57× | 66% |
+| 1 | 8 | 944,413 | 705 | 1.34M | 1.00× | 100% |
+| 2 | 16 | 1,294,687 | 527 | 2.46M | 1.83× | 92% |
+| 4 | 32 | 2,456,810 | 549 | 4.48M | 3.34× | 84% |
+| 8 | 64 | 2,754,431 | 452 | 6.09M | 4.55× | 57% |
+| 16 | 128 | 4,309,773 | 317 | 13.6M | 10.15× | 63% |
 
-QS TT stores are throttled to Exact/LowerBound entries only, reducing multi-threaded atomic contention. Combined with TT-in-QS, multi-threaded scaling improved across all thread counts (e.g., 16T NPS: 6.2M → 9.2M, +48%).
+QS TT stores are throttled to Exact/LowerBound entries only, reducing multi-threaded atomic contention. Cold-TT node counts are ~3-4× higher than the warm-TT NPS-vs-depth table above (e.g., depth 8: 944K cold vs 260K warm) — the warm table reflects accumulated entries from prior iterative deepening depths.
 
 ### Deep scaling (16 threads vs 1 thread by search depth)
 
-| Depth | 1T NPS | 16T NPS | Speedup | Efficiency | 1T nodes | 1T time |
-|-------|--------|---------|---------|------------|----------|---------|
-| 8 | 923K | 9,208K | 9.97× | 62% | 0.3M | 0.3s |
-| 10 | 826K | 8,136K | 9.85× | 62% | 1.2M | 1.5s |
-| 12 | 832K | 6,128K | 7.37× | 46% | 34.6M | 41.5s |
+All runs with fresh TT (8 MB × thread count). Higher node counts than warm-TT single-depth benchmarks.
 
-The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. TT-in-QS (Exact/LowerBound stores only), IIR, razor pruning, and delta pruning all contribute to the per-thread throughput improvement.
+| Depth | 1T nodes | 1T time | 1T NPS | 16T NPS | Speedup | Efficiency |
+|-------|----------|---------|--------|---------|---------|------------|
+| 10 | 7,632,456 | 5.7s | 1.33M | 11.4M | 8.57× | 54% |
+
+The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. TT-in-QS (Exact/LowerBound stores only), IIR, razor pruning, and delta pruning all contribute to per-thread throughput.
 
 ## Perft speed (kiwipete, release)
 
@@ -195,4 +193,4 @@ The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-
 |-------|-------|-----------|-----|
 | 1 | 48 | <1 | — |
 | 2 | 2,039 | <1 | — |
-| 3 | 97,862 | 29 | 3.4M |
+| 3 | 97,862 | 17 | 5.76M |

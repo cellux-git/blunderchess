@@ -2,11 +2,11 @@ use crate::board::{Board, MAX_MOVES};
 use crate::eval::EVAL;
 use crate::types::{Move, MoveKind, MAX_DEPTH};
 
-const HISTORY_MAX: i32 = 16384;
+const HISTORY_MAX: i16 = 16384;
 
 pub(crate) struct MoveOrdering {
     killers: [[Option<Move>; 2]; MAX_DEPTH as usize],
-    history: [[i32; 64]; 64],
+    history: [[i16; 64]; 64],
 }
 
 impl MoveOrdering {
@@ -18,7 +18,7 @@ impl MoveOrdering {
     }
 
     pub(crate) fn history_score(&self, mv: Move) -> i32 {
-        self.history[mv.from().index() as usize][mv.to().index() as usize]
+        self.history[mv.from().index() as usize][mv.to().index() as usize] as i32
     }
 
     pub(crate) fn order_moves(
@@ -45,7 +45,7 @@ impl MoveOrdering {
                 } else if mv == k1 {
                     8_999
                 } else {
-                    let hist = self.history[mv.from().index() as usize][mv.to().index() as usize];
+                    let hist = self.history[mv.from().index() as usize][mv.to().index() as usize] as i32;
                     let perturb = if ply == 0 && thread_id > 0 {
                         ((mv.from().index().wrapping_mul(thread_id)) % 16) as i32
                     } else { 0 };
@@ -87,8 +87,9 @@ impl MoveOrdering {
         let from = mv.from().index() as usize;
         let to = mv.to().index() as usize;
         let bonus = (depth as i32) * (depth as i32);
-        let new_val = self.history[from][to].saturating_add(bonus);
-        self.history[from][to] = if new_val > HISTORY_MAX { HISTORY_MAX } else { new_val };
+        let old = self.history[from][to] as i32;
+        let new_val = old.saturating_add(bonus);
+        self.history[from][to] = if new_val > HISTORY_MAX as i32 { HISTORY_MAX } else { new_val as i16 };
     }
 }
 

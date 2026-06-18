@@ -59,7 +59,9 @@ pub(crate) fn alpha_beta(
         hash_move = tt.probe(hash).and_then(|e| e.best_move);
     }
 
-    let can_null_move = !is_pv && depth >= alg.null_move.min_depth && ply > 0 && !board.in_check();
+    let in_check = board.in_check();
+
+    let can_null_move = !is_pv && depth >= alg.null_move.min_depth && ply > 0 && !in_check;
     let non_pawn_king = board.occupancy()
         & !board.pieces_bb(Piece::Pawn)
         & !board.pieces_bb(Piece::King);
@@ -79,7 +81,7 @@ pub(crate) fn alpha_beta(
     let static_eval = if depth <= alg.futility.max_depth { Some(EVAL.evaluate(board)) } else { None };
 
     // Razor pruning: at depth 1, if eval is far below alpha, skip to QS
-    if depth == 1 && !is_pv && !board.in_check() {
+    if depth == 1 && !is_pv && !in_check {
         if let Some(se) = static_eval {
             if se + alg.razor_margin <= alpha {
                 return quiescence(board, alpha, beta, ply, 0, state, tt);
@@ -111,7 +113,7 @@ pub(crate) fn alpha_beta(
 
         let from = mv.from();
 
-        let is_trivially_legal = !board.in_check() && {
+        let is_trivially_legal = !in_check && {
             if let Some(piece) = board.piece_at(from) {
                 let is_ep = mv.kind() == MoveKind::Capture
                     && board.en_passant() == Some(mv.to());
@@ -125,6 +127,7 @@ pub(crate) fn alpha_beta(
         };
 
         let undo = board.make_move(mv);
+        tt.prefetch(board.hash());
 
         if !is_trivially_legal {
             let king_sq = board.king_square(side);

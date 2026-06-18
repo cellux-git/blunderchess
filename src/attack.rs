@@ -453,24 +453,45 @@ pub fn file_mask(file: u8) -> u64 {
 }
 
 pub fn adjacent_files_mask(file: u8) -> u64 {
-    let mut mask: u64 = 0;
-    if file > 0 { mask |= file_mask(file - 1); }
-    mask |= file_mask(file);
-    if file < 7 { mask |= file_mask(file + 1); }
-    mask
+    ADJACENT_FILES[file as usize]
 }
 
-pub fn rank_mask_forward(sq: Square, color: Color) -> u64 {
-    let rank = sq.rank();
-    if color == Color::White {
-        let mut m: u64 = 0;
-        for r in (rank + 1)..8 { m |= 0xFFu64 << (r * 8); }
-        m
-    } else {
-        let mut m: u64 = 0;
-        for r in 0..rank { m |= 0xFFu64 << (r * 8); }
-        m
+const ADJACENT_FILES: [u64; 8] = {
+    let mut m = [0u64; 8];
+    let mut f: u8 = 0;
+    while f < 8 {
+        let mut mask: u64 = 0;
+        if f > 0 { mask |= FILE_A << (f - 1); }
+        mask |= FILE_A << f;
+        if f < 7 { mask |= FILE_A << (f + 1); }
+        m[f as usize] = mask;
+        f += 1;
     }
+    m
+};
+
+const RANK_MASK_FORWARD: [[u64; 64]; 2] = {
+    let mut t = [[0u64; 64]; 2];
+    let mut sq: u8 = 0;
+    while sq < 64 {
+        let rank = sq >> 3;
+        // White: ranks above current
+        let mut mw: u64 = 0;
+        let mut r = rank + 1;
+        while r < 8 { mw |= 0xFFu64 << (r * 8); r += 1; }
+        t[0][sq as usize] = mw;
+        // Black: ranks below current
+        let mut mb: u64 = 0;
+        let mut r2: u8 = 0;
+        while r2 < rank { mb |= 0xFFu64 << (r2 * 8); r2 += 1; }
+        t[1][sq as usize] = mb;
+        sq += 1;
+    }
+    t
+};
+
+pub fn rank_mask_forward(sq: Square, color: Color) -> u64 {
+    RANK_MASK_FORWARD[color.index()][sq.index() as usize]
 }
 
 pub fn king_distance(a: Square, b: Square) -> u8 {

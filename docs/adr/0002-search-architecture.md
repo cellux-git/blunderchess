@@ -37,4 +37,4 @@ All planned search extensions have been implemented: killer moves + history heur
 - The search implementation is ~300-400 lines of recursive code. Correctness depends heavily on perft-passing move generation and Zobrist correctness (every bug in either produces silent search errors).
 - TT entries must correctly encode node type (Exact, LowerBound, UpperBound) and adjust mate scores by depth. These are standard but easy to get wrong.
 - QS also uses the TT (probe at entry, store Exact/LowerBound on exit), with UpperBound stores skipped to reduce multi-threaded contention.
-- Search speed reaches depth 10+ in under 2 seconds (startpos, 1 thread), depth 8 in ~0.3s. 16-thread scaling approaches 10× speedup at depth 8.
+- Search speed reaches depth 8 in ~0.2s (startpos, 1 thread, warm TT). See `CONTEXT.md` for current performance data.

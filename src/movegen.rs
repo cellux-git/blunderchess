@@ -34,6 +34,19 @@ pub fn generate_pseudo_legal(board: &Board, moves: &mut [Move; MAX_MOVES], count
     generate_king_moves(board, side, us_bb, them_bb, moves, count);
 }
 
+pub fn generate_captures_promotions(board: &Board, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
+    let side = board.side_to_move();
+    let us_bb = board.colors_bb(side);
+    let them_bb = board.colors_bb(side.flip());
+    let occ = board.occupancy();
+    let ep = board.en_passant();
+
+    generate_pawn_captures_promos(board, side, us_bb, them_bb, occ, ep, moves, count);
+    generate_knight_captures(board, side, us_bb, them_bb, moves, count);
+    generate_sliding_captures(board, side, us_bb, them_bb, occ, moves, count);
+    generate_king_captures(board, side, us_bb, them_bb, moves, count);
+}
+
 fn generate_pawn_moves(
     board: &Board, color: Color,
     us_bb: u64, them_bb: u64, occ: u64, ep: Option<Square>,
@@ -216,7 +229,7 @@ fn generate_king_moves(
     // castling
     let rank = king_sq.rank();
     if color == Color::White && rank == 0 {
-        if board.castling_rights().white_kingside
+        if board.castling_rights().has_wk()
             && board.empty_square(Square::F1)
             && board.empty_square(Square::G1)
         {
@@ -228,7 +241,7 @@ fn generate_king_moves(
                 *count += 1;
             }
         }
-        if board.castling_rights().white_queenside
+        if board.castling_rights().has_wq()
             && board.empty_square(Square::D1)
             && board.empty_square(Square::C1)
             && board.empty_square(Square::B1)
@@ -240,7 +253,7 @@ fn generate_king_moves(
             *count += 1;
         }
     } else if color == Color::Black && rank == 7 {
-        if board.castling_rights().black_kingside
+        if board.castling_rights().has_bk()
             && board.empty_square(Square::F8)
             && board.empty_square(Square::G8)
             && !board.is_attacked_by(Square::E8, Color::White)
@@ -250,7 +263,7 @@ fn generate_king_moves(
             moves[*count] = Move::castle(Square::E8, Square::G8);
             *count += 1;
         }
-        if board.castling_rights().black_queenside
+        if board.castling_rights().has_bq()
             && board.empty_square(Square::D8)
             && board.empty_square(Square::C8)
             && board.empty_square(Square::B8)
@@ -261,6 +274,143 @@ fn generate_king_moves(
             moves[*count] = Move::castle(Square::E8, Square::C8);
             *count += 1;
         }
+    }
+}
+
+fn generate_pawn_captures_promos(
+    board: &Board, color: Color,
+    _us_bb: u64, them_bb: u64, occ: u64, ep: Option<Square>,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let pawns = board.pieces_bb(Piece::Pawn) & board.colors_bb(color);
+    if pawns == 0 { return; }
+
+    let dir: i32 = if color == Color::White { 8 } else { -8 };
+    let promo_rank_shift: i32 = if color == Color::White { 48 } else { 8 };
+    let promo_pieces = [Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen];
+
+    let mut bb = pawns;
+    while bb != 0 {
+        let sq_idx = bb.trailing_zeros() as i32;
+        let sq = Square::new(sq_idx as u8).unwrap();
+        bb &= bb - 1;
+
+        let rank = sq_idx >> 3;
+        let is_promo_rank = rank == (promo_rank_shift >> 3);
+
+        let fwd_idx = sq_idx + dir;
+        if is_promo_rank && fwd_idx >= 0 && fwd_idx < 64 && ((1u64 << fwd_idx) & occ) == 0 {
+            let fwd = Square::new(fwd_idx as u8).unwrap();
+            for &p in &promo_pieces {
+                moves[*count] = Move::promotion(sq, fwd, p);
+                *count += 1;
+            }
+        }
+
+        let attacks = crate::attack::pawn_attacks(sq, color);
+        let captures = attacks & them_bb;
+        let mut caps = captures;
+        while caps != 0 {
+            let cap_idx = caps.trailing_zeros() as u8;
+            caps &= caps - 1;
+            let to = Square::new(cap_idx).unwrap();
+            if is_promo_rank {
+                for &p in &promo_pieces {
+                    moves[*count] = Move::promotion(sq, to, p);
+                    *count += 1;
+                }
+            } else {
+                moves[*count] = Move::capture(sq, to);
+                *count += 1;
+            }
+        }
+
+        if let Some(ep_sq) = ep {
+            if (attacks & (1u64 << ep_sq.index())) != 0 {
+                moves[*count] = Move::ep(sq, ep_sq);
+                *count += 1;
+            }
+        }
+    }
+}
+
+fn generate_knight_captures(
+    board: &Board, _color: Color,
+    us_bb: u64, them_bb: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let knights = board.pieces_bb(Piece::Knight) & us_bb;
+    let mut bb = knights;
+    while bb != 0 {
+        let sq_idx = bb.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        bb &= bb - 1;
+        let attacks = crate::attack::knight_attacks(sq);
+        let captures = attacks & them_bb;
+        let mut c = captures;
+        while c != 0 {
+            let to_idx = c.trailing_zeros() as u8;
+            c &= c - 1;
+            moves[*count] = Move::capture(sq, Square::new(to_idx).unwrap());
+            *count += 1;
+        }
+    }
+}
+
+fn generate_sliding_captures(
+    board: &Board, _color: Color,
+    us_bb: u64, them_bb: u64, occ: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let bishops = board.pieces_bb(Piece::Bishop) & us_bb;
+    let rooks = board.pieces_bb(Piece::Rook) & us_bb;
+    let queens = board.pieces_bb(Piece::Queen) & us_bb;
+
+    let mut diag = bishops | queens;
+    while diag != 0 {
+        let sq_idx = diag.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        diag &= diag - 1;
+        let attacks = bishop_attacks(sq_idx, occ) & them_bb;
+        push_slider_captures(sq, attacks, moves, count);
+    }
+
+    let mut ortho = rooks | queens;
+    while ortho != 0 {
+        let sq_idx = ortho.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        ortho &= ortho - 1;
+        let attacks = rook_attacks(sq_idx, occ) & them_bb;
+        push_slider_captures(sq, attacks, moves, count);
+    }
+}
+
+#[inline]
+fn push_slider_captures(from: Square, captures: u64, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
+    let mut bb = captures;
+    while bb != 0 {
+        let lsb = bb.trailing_zeros() as u8;
+        bb &= bb - 1;
+        moves[*count] = Move::capture(from, Square::new(lsb).unwrap());
+        *count += 1;
+    }
+}
+
+fn generate_king_captures(
+    board: &Board, color: Color,
+    us_bb: u64, them_bb: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    if board.pieces_bb(Piece::King) & us_bb == 0 { return; }
+    let king_sq = board.king_square(color);
+    let attacks = crate::attack::king_attacks(king_sq);
+    let captures = attacks & them_bb;
+    let mut c = captures;
+    while c != 0 {
+        let to_idx = c.trailing_zeros() as u8;
+        c &= c - 1;
+        moves[*count] = Move::capture(king_sq, Square::new(to_idx).unwrap());
+        *count += 1;
     }
 }
 

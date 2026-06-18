@@ -51,22 +51,24 @@ pub fn zobrist_side_to_move() -> u64 {
     ZOBRIST_KEYS[SIDE_TO_MOVE_INDEX]
 }
 
+const CASTLING_HASH: [u64; 16] = {
+    let mut table = [0u64; 16];
+    let mut i: usize = 0;
+    while i < 16 {
+        let mut h = 0u64;
+        if i & 1 != 0 { h ^= ZOBRIST_KEYS[castling_index(0)]; }
+        if i & 2 != 0 { h ^= ZOBRIST_KEYS[castling_index(1)]; }
+        if i & 4 != 0 { h ^= ZOBRIST_KEYS[castling_index(2)]; }
+        if i & 8 != 0 { h ^= ZOBRIST_KEYS[castling_index(3)]; }
+        table[i] = h;
+        i += 1;
+    }
+    table
+};
+
 #[inline]
 pub fn zobrist_castling(rights: CastlingRights) -> u64 {
-    let mut hash = 0u64;
-    if rights.white_kingside {
-        hash ^= ZOBRIST_KEYS[castling_index(0)];
-    }
-    if rights.white_queenside {
-        hash ^= ZOBRIST_KEYS[castling_index(1)];
-    }
-    if rights.black_kingside {
-        hash ^= ZOBRIST_KEYS[castling_index(2)];
-    }
-    if rights.black_queenside {
-        hash ^= ZOBRIST_KEYS[castling_index(3)];
-    }
-    hash
+    CASTLING_HASH[rights.0 as usize]
 }
 
 #[inline]

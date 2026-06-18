@@ -192,19 +192,11 @@ pub(crate) fn eval_rook_queen_battery(board: &Board, piece: &PieceEval, color: C
             let between = if on_same_file {
                 let min_r = q_rank.min(r_rank);
                 let max_r = q_rank.max(r_rank);
-                let mut bb = 0u64;
-                for r in (min_r + 1)..max_r {
-                    bb |= 1u64 << ((r as u32) * 8 + q_file as u32);
-                }
-                bb
+                ((1u64 << (max_r * 8)) - (1u64 << ((min_r + 1) * 8))) & (0x0101010101010101u64 << q_file)
             } else {
                 let min_f = q_file.min(r_file);
                 let max_f = q_file.max(r_file);
-                let mut bb = 0u64;
-                for f in (min_f + 1)..max_f {
-                    bb |= 1u64 << ((q_rank as u32) * 8 + f as u32);
-                }
-                bb
+                ((1u64 << max_f) - (1u64 << (min_f + 1))) << (q_rank * 8)
             };
 
             let our_pawns = board.pieces_bb(Piece::Pawn) & us_bb & between;

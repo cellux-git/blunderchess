@@ -47,7 +47,11 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let mut pseudo_count: usize = 0;
-    movegen::generate_pseudo_legal(board, &mut moves_buf, &mut pseudo_count);
+    if qs_depth > 0 && !in_check {
+        movegen::generate_captures_promotions(board, &mut moves_buf, &mut pseudo_count);
+    } else {
+        movegen::generate_pseudo_legal(board, &mut moves_buf, &mut pseudo_count);
+    }
 
     let side = board.side_to_move();
     let pinned = board.pinned_pieces(side);
@@ -102,6 +106,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
     for i in 0..filtered {
         let mv = moves_buf[i];
         let undo = board.make_move(mv);
+        tt.prefetch(board.hash());
         let king_sq = board.king_square(side);
         if board.is_attacked_by(king_sq, board.side_to_move()) {
             board.unmake_move(&undo);

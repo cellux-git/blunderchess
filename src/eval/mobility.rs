@@ -2,7 +2,7 @@ use crate::board::Board;
 use crate::eval::params::MobilityTables;
 use crate::types::{Color, Piece, Square};
 
-fn enemy_pawn_attack_mask(enemy_pawns_bb: u64, enemy: Color) -> u64 {
+pub(crate) fn enemy_pawn_attack_mask(enemy_pawns_bb: u64, enemy: Color) -> u64 {
     let mut mask = 0u64;
     let mut pawns = enemy_pawns_bb;
     while pawns != 0 {
@@ -13,10 +13,9 @@ fn enemy_pawn_attack_mask(enemy_pawns_bb: u64, enemy: Color) -> u64 {
     mask
 }
 
-pub(crate) fn eval_mobility(board: &Board, mobility: &MobilityTables, color: Color, enemy_pawns_bb: u64, enemy: Color) -> (i32, i32) {
+pub(crate) fn eval_mobility(board: &Board, mobility: &MobilityTables, color: Color, enemy_pawn_attacks: u64) -> (i32, i32) {
     let us_bb = board.colors_bb(color);
     let occ = board.occupancy();
-    let enemy_pawn_attacks = enemy_pawn_attack_mask(enemy_pawns_bb, enemy);
     let mut mg = 0i32;
     let mut eg = 0i32;
 

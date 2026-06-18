@@ -1,4 +1,4 @@
-use crate::types::{Bitboard, CastlingRights, Color, Move, MoveKind, Piece, Square};
+use crate::types::{Bitboard, CastlingRights, Color, Move, MoveKind, Piece, Square, CASTLE_LOSE_MASK};
 use crate::zobrist;
 use std::fmt;
 
@@ -98,10 +98,10 @@ mod tests {
         let e2 = Square::from_file_rank(4, 1).unwrap();
         let mv = Move::new(Square::E1, e2);
         let undo = board.make_move(mv);
-        assert!(!board.castling_rights().white_kingside);
-        assert!(!board.castling_rights().white_queenside);
-        assert!(board.castling_rights().black_kingside);
-        assert!(board.castling_rights().black_queenside);
+        assert!(!board.castling_rights().has_wk());
+        assert!(!board.castling_rights().has_wq());
+        assert!(board.castling_rights().has_bk());
+        assert!(board.castling_rights().has_bq());
 
         board.unmake_move(&undo);
         assert_eq!(board.castling_rights(), CastlingRights::ALL);
@@ -115,10 +115,10 @@ mod tests {
         let a2 = Square::from_file_rank(0, 1).unwrap();
         let mv = Move::new(Square::A1, a2);
         let undo = board.make_move(mv);
-        assert!(!board.castling_rights().white_queenside);
-        assert!(board.castling_rights().white_kingside);
-        assert!(board.castling_rights().black_kingside);
-        assert!(board.castling_rights().black_queenside);
+        assert!(!board.castling_rights().has_wq());
+        assert!(board.castling_rights().has_wk());
+        assert!(board.castling_rights().has_bk());
+        assert!(board.castling_rights().has_bq());
 
         board.unmake_move(&undo);
         assert_eq!(board.castling_rights(), CastlingRights::ALL);
@@ -131,8 +131,8 @@ mod tests {
 
         let mv = Move::capture(Square::H1, Square::H8);
         let _undo = board.make_move(mv);
-        assert!(!board.castling_rights().black_kingside);
-        assert!(board.castling_rights().black_queenside);
+        assert!(!board.castling_rights().has_bk());
+        assert!(board.castling_rights().has_bq());
     }
 
     #[test]
@@ -246,7 +246,8 @@ pub struct Board {
     fullmove_number: u16,
     hash: u64,
     king_square: [Square; 2],
-    history: Vec<u64>,
+    history: [u64; 100],
+    history_len: u8,
 
     // cached derived state (updated incrementally in make_move)
     pinned: [Bitboard; 2],       // per-color bitboard of pinned pieces
@@ -268,7 +269,7 @@ impl Board {
     pub fn fullmove_number(&self) -> u16 { self.fullmove_number }
     pub fn hash(&self) -> u64 { self.hash }
     pub fn king_square(&self, color: Color) -> Square { self.king_square[color.index()] }
-    pub fn history(&self) -> &Vec<u64> { &self.history }
+    pub fn history(&self) -> &[u64] { &self.history[..self.history_len as usize] }
 
     pub fn phase(&self) -> i32 { self.phase }
 
@@ -288,7 +289,8 @@ impl Board {
             en_passant: None, halfmove_clock: 0, fullmove_number: 1,
             hash: 0,
             king_square: [Square::E1, Square::E8],
-            history: Vec::new(),
+            history: [0; 100],
+            history_len: 0,
             pinned: [0; 2],
             phase: 0,
         }
@@ -299,7 +301,7 @@ impl Board {
         if parts.len() < 4 { return Err("Invalid FEN: need at least 4 fields".to_string()); }
 
         let mut board = Board::new();
-        board.history = Vec::new();
+        board.history_len = 0;
 
         let rank_strings: Vec<&str> = parts[0].split('/').collect();
         if rank_strings.len() != 8 { return Err("Invalid FEN: wrong number of ranks".to_string()); }
@@ -334,10 +336,10 @@ impl Board {
         board.castling_rights = CastlingRights::NONE;
         for ch in parts[2].chars() {
             match ch {
-                'K' => board.castling_rights.white_kingside = true,
-                'Q' => board.castling_rights.white_queenside = true,
-                'k' => board.castling_rights.black_kingside = true,
-                'q' => board.castling_rights.black_queenside = true,
+                'K' => board.castling_rights.set_wk(true),
+                'Q' => board.castling_rights.set_wq(true),
+                'k' => board.castling_rights.set_bk(true),
+                'q' => board.castling_rights.set_bq(true),
                 '-' => {}
                 _ => return Err(format!("Invalid FEN: unknown castling char '{ch}'")),
             }
@@ -429,16 +431,20 @@ impl Board {
         let king_bb = self.pieces_bb[Piece::King as usize] & enemy;
         if king_bb & crate::attack::king_attacks(sq) != 0 { return true; }
 
-        // sliding pieces — compute attacks once per direction
+        // sliding pieces — compute each direction only if relevant pieces exist
         let rooks = self.pieces_bb[Piece::Rook as usize] & enemy;
         let bishops = self.pieces_bb[Piece::Bishop as usize] & enemy;
         let queens = self.pieces_bb[Piece::Queen as usize] & enemy;
 
-        if (rooks | bishops | queens) != 0 {
+        let rook_sliders = rooks | queens;
+        let bishop_sliders = bishops | queens;
+        if rook_sliders != 0 {
             let r_atk = crate::attack::rook_attacks(s, occ);
+            if rook_sliders & r_atk != 0 { return true; }
+        }
+        if bishop_sliders != 0 {
             let b_atk = crate::attack::bishop_attacks(s, occ);
-            if (rooks | queens) & r_atk != 0 { return true; }
-            if (bishops | queens) & b_atk != 0 { return true; }
+            if bishop_sliders & b_atk != 0 { return true; }
         }
 
         false
@@ -548,27 +554,31 @@ impl Board {
             prev_pinned: self.pinned,
         };
 
-        self.history.push(self.hash);
+        self.history[self.history_len as usize] = self.hash;
+        self.history_len += 1;
         self.hash ^= zobrist::zobrist_piece_square(color, piece, from);
 
         let captured = self.piece_at(to);
+        let mut phase_delta: i32 = 0;
 
         match mv.kind() {
             MoveKind::Normal | MoveKind::Promotion => {
                 if let Some(cap_piece) = captured {
-                    let cap_color = self.color_at(to).unwrap();
+                    let cap_color = color.flip();
                     undo.captured = Some((cap_piece, cap_color));
                     self.hash ^= zobrist::zobrist_piece_square(cap_color, cap_piece, to);
                     self.remove_piece(to, cap_piece, cap_color);
+                    phase_delta -= Self::piece_phase_weight(cap_piece);
                 }
             }
             MoveKind::Capture => {
                 if let Some(cap_piece) = captured {
-                    let cap_color = self.color_at(to).unwrap();
+                    let cap_color = color.flip();
                     undo.captured = Some((cap_piece, cap_color));
                     undo.captured_sq = to;
                     self.hash ^= zobrist::zobrist_piece_square(cap_color, cap_piece, to);
                     self.remove_piece(to, cap_piece, cap_color);
+                    phase_delta -= Self::piece_phase_weight(cap_piece);
                 } else if let Some(ep) = self.en_passant {
                     if to == ep && piece == Piece::Pawn {
                         let cap_rank = from.rank();
@@ -578,6 +588,7 @@ impl Board {
                         undo.captured_sq = cap_sq;
                         self.hash ^= zobrist::zobrist_piece_square(cap_color, Piece::Pawn, cap_sq);
                         self.remove_piece(cap_sq, Piece::Pawn, cap_color);
+                        phase_delta -= Self::piece_phase_weight(Piece::Pawn);
                     }
                 }
             }
@@ -608,6 +619,7 @@ impl Board {
             self.remove_piece(from, piece, color);
             self.place_piece(to, promo, color);
             self.hash ^= zobrist::zobrist_piece_square(color, promo, to);
+            phase_delta += Self::piece_phase_weight(promo) - Self::piece_phase_weight(Piece::Pawn);
         } else {
             self.move_piece(from, to, piece, color);
             self.hash ^= zobrist::zobrist_piece_square(color, piece, to);
@@ -628,39 +640,36 @@ impl Board {
         }
 
         let old_castling = self.castling_rights;
+        let mut lose_mask = 0u8;
         if piece == Piece::King {
-            if color == Color::White {
-                self.castling_rights.white_kingside = false;
-                self.castling_rights.white_queenside = false;
-            } else {
-                self.castling_rights.black_kingside = false;
-                self.castling_rights.black_queenside = false;
-            }
+            lose_mask |= CASTLE_LOSE_MASK[from.index() as usize];
             self.king_square[color.index()] = to;
-        }
-        if piece == Piece::Rook {
-            if from == Square::A1 { self.castling_rights.white_queenside = false; }
-            else if from == Square::H1 { self.castling_rights.white_kingside = false; }
-            else if from == Square::A8 { self.castling_rights.black_queenside = false; }
-            else if from == Square::H8 { self.castling_rights.black_kingside = false; }
+        } else if piece == Piece::Rook {
+            lose_mask |= CASTLE_LOSE_MASK[from.index() as usize];
         }
         if captured.is_some() {
-            if to == Square::A1 { self.castling_rights.white_queenside = false; }
-            else if to == Square::H1 { self.castling_rights.white_kingside = false; }
-            else if to == Square::A8 { self.castling_rights.black_queenside = false; }
-            else if to == Square::H8 { self.castling_rights.black_kingside = false; }
+            lose_mask |= CASTLE_LOSE_MASK[to.index() as usize];
         }
+        self.castling_rights.remove_by_mask(lose_mask);
 
         self.hash ^= zobrist::zobrist_castling(old_castling);
         self.hash ^= zobrist::zobrist_castling(self.castling_rights);
         self.hash ^= zobrist::zobrist_side_to_move();
         self.side_to_move = color.flip();
 
-        self.phase = self.compute_phase();
+        self.phase = (self.phase + phase_delta).clamp(0, 24);
         if piece == Piece::King || (from.bit() & self.pinned[color.index()]) != 0 {
             self.pinned[color.index()] = self.compute_pinned_impl(color);
         }
-        self.pinned[color.flip().index()] = self.compute_pinned_impl(color.flip());
+        let is_slider = piece == Piece::Bishop || piece == Piece::Rook || piece == Piece::Queen;
+        let need_opponent_pin_update = is_slider
+            || mv.kind() == MoveKind::Promotion
+            || captured.is_some()
+            || mv.kind() == MoveKind::Capture
+            || mv.kind() == MoveKind::Castle;
+        if need_opponent_pin_update {
+            self.pinned[color.flip().index()] = self.compute_pinned_impl(color.flip());
+        }
 
         undo
     }
@@ -708,7 +717,7 @@ impl Board {
         self.hash = undo.prev_hash;
         self.phase = undo.prev_phase;
         self.pinned = undo.prev_pinned;
-        self.history.pop();
+        self.history_len -= 1;
         self.side_to_move = color;
         self.fullmove_number = if color == Color::Black { self.fullmove_number - 1 } else { self.fullmove_number };
     }
@@ -726,7 +735,8 @@ impl Board {
             prev_phase: self.phase,
             prev_pinned: self.pinned,
         };
-        self.history.push(self.hash);
+        self.history[self.history_len as usize] = self.hash;
+        self.history_len += 1;
         if let Some(ep) = self.en_passant {
             self.hash ^= crate::zobrist::zobrist_en_passant(Some(ep.file()));
         }
@@ -743,7 +753,7 @@ impl Board {
         self.hash = undo.prev_hash;
         self.phase = undo.prev_phase;
         self.pinned = undo.prev_pinned;
-        self.history.pop();
+        self.history_len -= 1;
         self.side_to_move = self.side_to_move.flip();
     }
 
