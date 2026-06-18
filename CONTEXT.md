@@ -150,41 +150,6 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | `zobrist.rs` | 3 | Incremental hash matches full, hash changes after move, side-to-move toggle |
 | `tests/benchmarks.rs` | 10 | Tactical: Scholar's Mate, back-rank mate, hanging queen, promotion, smothered mate, mate-in-2, pin, discovered attack, depth convergence. 3 ignored perf benchmarks. |
 
-| # | Task | Status | Impact | Notes |
-|---|------|--------|--------|-------|
-| 1 | Make/unmake with state stack | ✅ DONE | **High** — eliminates per-node Board clone | |
-| 2 | Packed `u16` moves | ✅ DONE | **High** — zero heap allocations in movegen | |
-| 3 | Bitboards + magic sliders | ✅ DONE | **High** — O(1) attack detection | Runtime-generated bishop magics |
-| 4 | Pseudo-legal movegen | ✅ DONE | **High** — ~25% speedup | Legality check in search |
-| 5 | Killer moves + history heuristic | ✅ DONE | **Medium** — ~15% node reduction | 2 killers/depth, 64×64 table |
-| 6 | Tapered evaluation | ✅ DONE | **Medium** — better endgame play | mg/eg PST blending by material phase |
-| 7 | Lazy SMP (multi-threaded) | ✅ DONE | **High** — TT sharing reduces nodes | Threads 2+ perturb quiet ordering |
-| 8 | Lock-free TT + huge pages | ✅ DONE | **High** — 2× vs Mutex TT | Selective store skips ~60% of writes |
-| 9 | Aspiration windows | ✅ DONE | **Low** — ~10% speedup | Depth ≥4: narrows root window to prev_score ± 25cp; re-searches with wider bounds on fail-low/high. Neutral at depth ≤10. |
-| 10 | Late move reductions (LMR) | ✅ DONE | **Medium** — reduces nodes at moderate+ depths | Reduces quiet moves 4+, skips killers; neutral at depth≤10 |
-| 11 | Full positional evaluation | ✅ DONE | **High** — quality jump | 14 evaluation term groups: pawn structure (doubled/isolated/passed/backward/phalanx/chain/candidate), king safety (shield + open files + zone attackers), mobility (logarithmic, MG+EG, 4 piece types), bishop pair + bad bishop (generalized), rook files (+closed, +7th rank, +queen battery), queen multi-attack (+fork), outpost knights (+rim/trapped), connected passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), king opposition, space control, pawn majority, exchange evaluation. |
-| 12 | Configurable piece values | ✅ DONE | **Medium** — unlocks tuning | `Eval` struct with 40+ fields: material, PSTs, pawn struct, mobility, king safety; `Eval::default()` returns PeSTO |
-| 13 | Pre-filter legal moves (pin detection) | ✅ DONE | **Medium** — eliminates clone + redundant legality checks | `Board::pinned_pieces()` via ray-scan; search uses `generate_pseudo_legal` (no clone); non-pinned non-king non-ep moves skip make/unmake/is_attacked_by. Modest speedup at current depths; scales with branching factor. |
-| 14 | Workspace split (lib + bin) | ✅ DONE | **Low** — structural | `src/lib.rs` added; integration tests in `tests/` |
-| 15 | Benchmark suite | ✅ DONE | **Low** — validation | 3 ignored perf benches + 10 tactical tests in `tests/benchmarks.rs` |
-| 16 | UCI: Ponder, MultiPV | ✅ DONE | **Low** — niche features | `go ponder`/`ponderhit`/`stop` flow; `setoption MultiPV value N`; multi-PV root loop with per-index aspiration windows and move exclusion |
-| 17 | Opening book (Polyglot) | ✅ DONE | **Low** — no strength impact | New `src/book.rs`: loads `.bin` files (16-byte entries), binary search by `board.hash`, Polyglot move ↔ `Move` conversion, weighted pick. UCI: `setoption name OwnBook value true`, `setoption name BookFile value path.bin`. |
-| 18 | Full bitboard movegen for sliders | ✅ DONE | **Medium** — replace mailbox slider loops | Magic-based bit extraction; ~57 lines removed |
-| 19 | Futility pruning | ✅ DONE | **Medium** — reduces nodes near horizon | Skip quiet moves at depth ≤ 2 when static_eval + margin < alpha. Margins: 200cp@d1, 400cp@d2. |
-| 20 | Static Exchange Evaluation (SEE) | ✅ DONE | **Medium** — better capture ordering | Recursive SEE (smallest attacker first) in `src/eval.rs`. Replaces MVV-LVA in `order_moves`/`order_moves_q`; losing captures (SEE < 0) pruned in quiescence. 5 unit tests. |
-| 21 | Summary + interactive extension of positional eval | ✅ DONE | **Medium** — eval quality | Reviewed `eval.rs`, added 13 new evaluation term groups across 13 `ready-for-agent` issues. All unit + integration tests pass (86). |
-| 22 | Thread pool for search workers | ✅ DONE | **Medium** — multicore scaling | Replace per-thread spawn with a persistent thread pool |
-| 23 | Fix unsound Nxb4 sacrifice from pawn PST bias | ✅ DONE | **High** — eval quality | Reduced mg_pawn_table row 1 (rank 2/7) from ~100 avg to ~5, increased rows 2–3 for advanced pawns. Nxb4 static eval from +457 cp Black → neutral. |
-| 24 | Human review of positional evaluation | `needs-info` | **Medium** — eval quality | Review all eval terms; suggest improvements and new terms |
-| 25 | Remove opening-book compensation hacks from knight/bishop/king PST | ✅ DONE | **Medium** — eval quality | Replaced mg_knight (swing -89→+129 → -10→+15), mg_bishop (c1 -82→0), mg_king (e1 -56→-10) with smooth centralization tables. All 142 tests pass. No NPS regression. |
-| 26 | Group Eval into six domain sub-structs | ✅ DONE | **High** — testability | ADR-0007. MaterialValues, PieceSquareTables, MobilityTables, PawnEval, PieceEval, KingEval with Default impls. All eval functions updated. |
-| 27 | Extract SearchAlgorithmParams from hardcoded magic numbers | ✅ DONE | **Medium** — tunability | ADR-0008. Nested LmrConfig, NullMoveConfig, AspirationConfig, FutilityConfig. 15+ magic numbers → SearchAlgorithmParams::default(). |
-| 28 | Encapsulate Engine: private fields, fix ThreadPool lifecycle | ✅ DONE | **Medium** — safety | ADR-0009. All 11 fields private. search_position() added as test seam. ThreadPool no longer replaced at runtime. |
-| 29 | Extract MoveOrdering module from search.rs | ✅ DONE | **Medium** — testability | Killer table + history heuristic + order_moves/q extracted to src/move_ordering.rs. ~55 lines removed from search.rs. |
-| 30 | Make passed_pawns a free function | ✅ DONE | **Low** — cleanup | Removed dead &self parameter. Extracted from impl Eval to standalone function in pawns.rs. |
-| 31 | Performance bottleneck investigation | ✅ DONE | **High** — 80-100% NPS target | See `.scratch/perf-bottleneck-investigation/issues/01-perf-bottleneck-analysis.md`. Identifies critical hot-path waste: `check_result()` clones board at every alpha-beta node, QS uses expensive `generate_legal_moves`, eval defaults constructed redundantly, TT cache-line contention caps Lazy SMP at 1.37×. 6 AFK vertical slices proposed. |
-| 32 | PST positional overcompensation | ✅ DONE | **High** — eval quality | Material scaling in `src/eval/mod.rs` (`scale_positional`): when a side is down ≥200 cp, positional terms scaled by `200/(200+deficit)`. Eval after a4b5 f6e5 went from +92 → −77. Test: `test_a4b5_detected_as_material_loss`. PST tables also moderated (mg_pawn_table rows 2-4, mg_bishop_table rows 0/1/6/7). |
-
 ## Performance (release build, startpos, 1 thread, shared TT)
 
 | Depth | Nodes | Time (ms) | NPS |

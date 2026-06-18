@@ -375,4 +375,21 @@ mod tests {
             "After a4b5 f6e5, eval should be negative (White lost knight for pawn), got {}",
             ev.evaluate(&b));
     }
+
+    #[test]
+    fn test_queen_not_sacrificed_when_attacked() {
+        // Regression: engine played Qxh2?? (saccing queen for pawn) when queen
+        // was attacked by e3 pawn — quiescence falsely detected mate after the
+        // recapture because the king was on h2 within bishop range (Bg7-e5+).
+        crate::attack::init_slider_tables();
+        let fen = "rnb3k1/pp3pb1/3p2pp/2pP4/4Nq2/4P3/PP3PBP/R2Q1RK1 b - - 0 16";
+        let board = Board::from_fen(fen).unwrap();
+        let tt = make_tt();
+        let stop = Arc::new(AtomicBool::new(false));
+        let result = search(&board, &SearchParams::with_depth(4), &stop, &tt, None);
+        if let Some(bm) = result.best_move {
+            assert_ne!(bm.to_string(), "f4h2",
+                "Engine should not play Qxh2?? (score: {})", result.score);
+        }
+    }
 }

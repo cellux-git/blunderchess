@@ -27,7 +27,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
         let mv = moves_buf[i];
         let k = mv.kind();
         let is_cap_or_promo = k == MoveKind::Capture || k == MoveKind::Promotion;
-        let include = is_cap_or_promo || qs_depth == 0;
+        let include = is_cap_or_promo || qs_depth == 0 || in_check;
         if include {
             let undo = board.make_move(mv);
             let king = board.king_square(side);
