@@ -153,9 +153,9 @@ impl Default for PieceSquareTables {
                 -60, -50, -40, -35, -35, -40, -50, -60,
                 -50, -40, -30, -25, -25, -30, -40, -50,
                 -40, -30, -20, -15, -15, -20, -30, -40,
-                -30, -20, -10,  -5,  -5, -10, -20, -30,
-                -25, -15,  -5,   0,   0,  -5, -15, -25,
-                -25, -15,   5,  -5, -10,  -5,  10, -15,
+                -35, -25, -15, -10, -10, -15, -25, -35,
+                -30, -20, -15, -20, -20, -15, -20, -30,
+                -10,   0,  10,   0,  -5,   5,  15,   0,
             ],
             eg_king_table: [
                 -100, -60, -40, -30, -30, -40, -60, -100,
@@ -287,6 +287,8 @@ pub(crate) struct KingEval {
     pub(crate) rook_behind_passer_bonus: (i32, i32),
     pub(crate) king_passer_proximity_bonus: i32,
     pub(crate) king_passer_proximity_bonus_mg: i32,
+    pub(crate) castling_rights_kingside_bonus: i32,
+    pub(crate) castling_rights_queenside_bonus: i32,
 }
 
 impl Default for KingEval {
@@ -299,6 +301,8 @@ impl Default for KingEval {
             rook_behind_passer_bonus: (20, 30),
             king_passer_proximity_bonus: 10,
             king_passer_proximity_bonus_mg: 5,
+            castling_rights_kingside_bonus: 30,
+            castling_rights_queenside_bonus: 20,
         }
     }
 }

@@ -127,6 +127,14 @@ impl Eval {
         accumulate!(Queen, mg_queen_table, eg_queen_table);
         accumulate!(King, mg_king_table, eg_king_table);
 
+        if color == Color::White {
+            if board.castling_rights().has_wk() { pos_mg += self.king.castling_rights_kingside_bonus; }
+            if board.castling_rights().has_wq() { pos_mg += self.king.castling_rights_queenside_bonus; }
+        } else {
+            if board.castling_rights().has_bk() { pos_mg += self.king.castling_rights_kingside_bonus; }
+            if board.castling_rights().has_bq() { pos_mg += self.king.castling_rights_queenside_bonus; }
+        }
+
         let (m, e, my_passers) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
@@ -627,5 +635,33 @@ mod tests {
         let s1 = ev.evaluate(&Board::from_fen("k7/8/8/8/8/8/4q3/4K3 w - -").unwrap());
         let s2 = ev.evaluate(&Board::from_fen("k7/8/5q2/8/8/8/8/4K3 w - -").unwrap());
         assert!(s2 > s1);
+    }
+
+    #[test]
+    fn test_castling_preferred_over_king_move() {
+        // O-O should evaluate better than Kd2 in a position where castling is available
+        let fen = "rn1q1rk1/1b2bppp/p3pn2/1p1pN3/2pP1B2/P1N1P3/1PP1BPPP/R1Q1K2R w KQ - 5 11";
+        let board = Board::from_fen(fen).unwrap();
+        let ev = Eval::default();
+
+        // O-O: e1g1
+        let oo = Move::castle(Square::E1, Square::G1);
+        let mut board_oo = board.clone();
+        board_oo.make_move(oo);
+        let eval_oo = ev.evaluate(&board_oo);
+
+        // Kd2: e1d2
+        let kd2 = Move::new(
+            Square::from_file_rank(4, 0).unwrap(),
+            Square::from_file_rank(3, 1).unwrap(),
+        );
+        let mut board_kd2 = board.clone();
+        board_kd2.make_move(kd2);
+        let eval_kd2 = ev.evaluate(&board_kd2);
+
+        assert!(
+            eval_oo > eval_kd2,
+            "O-O eval ({eval_oo}) should be > Kd2 eval ({eval_kd2})"
+        );
     }
 }
