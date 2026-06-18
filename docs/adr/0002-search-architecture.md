@@ -21,7 +21,7 @@ The v1 search is **alpha-beta with Principal Variation Search (PVS), iterative d
 
 ## Extension path
 
-All planned search extensions have been implemented: killer moves + history heuristic, Late Move Reductions (LMR), aspiration windows, pin pre-filter, futility pruning, Static Exchange Evaluation (SEE) for capture ordering, bitboard slider movegen, Lazy SMP multi-threading, MultiPV, ponder, and Polyglot opening book. See `CONTEXT.md` for the full task list.
+All planned search extensions have been implemented: killer moves + history heuristic (with gravity aging), history-based Late Move Reductions (LMR), aspiration windows, pin pre-filter, futility pruning, SEE-based capture ordering with quiescence SEE pruning of losing captures, full bitboard move generation, cached phase and pinned bitboards (incremental in make/unmake), Lazy SMP multi-threading, MultiPV, ponder, and Polyglot opening book. See `CONTEXT.md` for current performance data.
 
 ## Considered options
 

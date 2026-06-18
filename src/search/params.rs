@@ -29,6 +29,7 @@ pub struct SearchResult {
     pub depth: u8,
     pub pv: Vec<Move>,
     pub nodes: u64,
+    pub total_nodes: u64,
     pub time_ms: u64,
     pub multi_pv_lines: Vec<(u8, i32, Vec<Move>)>,
 }

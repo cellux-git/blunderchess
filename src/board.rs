@@ -16,6 +16,8 @@ pub struct UndoInfo {
     prev_ep: Option<Square>,
     prev_halfmove: u8,
     prev_hash: u64,
+    prev_phase: i32,
+    prev_pinned: [Bitboard; 2],
 }
 
 #[cfg(test)]
@@ -245,6 +247,10 @@ pub struct Board {
     hash: u64,
     king_square: [Square; 2],
     history: Vec<u64>,
+
+    // cached derived state (updated incrementally in make_move)
+    pinned: [Bitboard; 2],       // per-color bitboard of pinned pieces
+    phase: i32,                   // game phase (0-24, non-pawn non-king weighted sum)
 }
 
 impl Board {
@@ -264,6 +270,14 @@ impl Board {
     pub fn king_square(&self, color: Color) -> Square { self.king_square[color.index()] }
     pub fn history(&self) -> &Vec<u64> { &self.history }
 
+    pub fn phase(&self) -> i32 { self.phase }
+
+    fn piece_phase_weight(piece: Piece) -> i32 {
+        match piece {
+            Piece::Knight => 1, Piece::Bishop => 1, Piece::Rook => 2, Piece::Queen => 4, _ => 0,
+        }
+    }
+
     pub fn new() -> Board {
         Board {
             squares: [None; 64], colors: [None; 64],
@@ -275,6 +289,8 @@ impl Board {
             hash: 0,
             king_square: [Square::E1, Square::E8],
             history: Vec::new(),
+            pinned: [0; 2],
+            phase: 0,
         }
     }
 
@@ -342,6 +358,8 @@ impl Board {
         if parts.len() >= 6 { board.fullmove_number = parts[5].parse::<u16>().map_err(|_| "Invalid fullmove number".to_string())?; }
 
         board.hash = zobrist::compute_initial_hash(&board.squares, &board.colors, board.side_to_move, board.castling_rights, board.en_passant);
+        board.phase = board.compute_phase();
+        board.pinned = [board.compute_pinned(Color::White), board.compute_pinned(Color::Black)];
         Ok(board)
     }
 
@@ -411,14 +429,17 @@ impl Board {
         let king_bb = self.pieces_bb[Piece::King as usize] & enemy;
         if king_bb & crate::attack::king_attacks(sq) != 0 { return true; }
 
-        // sliding pieces
+        // sliding pieces — compute attacks once per direction
         let rooks = self.pieces_bb[Piece::Rook as usize] & enemy;
         let bishops = self.pieces_bb[Piece::Bishop as usize] & enemy;
         let queens = self.pieces_bb[Piece::Queen as usize] & enemy;
 
-        if rooks & crate::attack::rook_attacks(s, occ) != 0 { return true; }
-        if bishops & crate::attack::bishop_attacks(s, occ) != 0 { return true; }
-        if queens & crate::attack::queen_attacks(s, occ) != 0 { return true; }
+        if (rooks | bishops | queens) != 0 {
+            let r_atk = crate::attack::rook_attacks(s, occ);
+            let b_atk = crate::attack::bishop_attacks(s, occ);
+            if (rooks | queens) & r_atk != 0 { return true; }
+            if (bishops | queens) & b_atk != 0 { return true; }
+        }
 
         false
     }
@@ -427,10 +448,26 @@ impl Board {
         self.is_attacked_by(self.king_square[self.side_to_move.index()], self.side_to_move.flip())
     }
 
+    pub fn pinned_pieces(&self, king_color: Color) -> Bitboard {
+        self.pinned[king_color.index()]
+    }
+
+    fn compute_phase(&self) -> i32 {
+        let mut phase = 0i32;
+        for &(_, piece, _) in &self.piece_list {
+            phase += Self::piece_phase_weight(piece);
+        }
+        phase.min(24)
+    }
+
+    fn compute_pinned(&self, king_color: Color) -> Bitboard {
+        self.compute_pinned_impl(king_color)
+    }
+
     /// Bitboard of pieces pinned to the given king.
     /// A piece is pinned if it stands between its king and an enemy slider (rook/bishop/queen).
     #[allow(unused_assignments)]
-    pub fn pinned_pieces(&self, king_color: Color) -> Bitboard {
+    fn compute_pinned_impl(&self, king_color: Color) -> Bitboard {
         let king_sq = self.king_square[king_color.index()];
         let friend = self.colors_bb[king_color.index()];
         let enemy = self.colors_bb[king_color.flip().index()];
@@ -472,7 +509,6 @@ impl Board {
                         break;
                     }
                     maybe_pinned = Some(sq_bit);
-                    maybe_pinned = Some(sq_bit);
                 } else if sq_bit & enemy != 0 {
                     if let Some(pb) = maybe_pinned {
                         let is_slider = if is_ortho {
@@ -508,6 +544,8 @@ impl Board {
             prev_ep: self.en_passant,
             prev_halfmove: self.halfmove_clock,
             prev_hash: self.hash,
+            prev_phase: self.phase,
+            prev_pinned: self.pinned,
         };
 
         self.history.push(self.hash);
@@ -557,8 +595,6 @@ impl Board {
             }
         }
 
-        self.hash ^= zobrist::zobrist_piece_square(color, piece, to);
-
         if piece == Piece::Pawn || captured.is_some() || mv.kind() == MoveKind::Capture {
             self.halfmove_clock = 0;
         } else {
@@ -571,8 +607,10 @@ impl Board {
             let promo = mv.promotion_piece().unwrap_or(Piece::Queen);
             self.remove_piece(from, piece, color);
             self.place_piece(to, promo, color);
+            self.hash ^= zobrist::zobrist_piece_square(color, promo, to);
         } else {
             self.move_piece(from, to, piece, color);
+            self.hash ^= zobrist::zobrist_piece_square(color, piece, to);
         }
 
         if let Some(ep) = self.en_passant {
@@ -618,6 +656,10 @@ impl Board {
         self.hash ^= zobrist::zobrist_side_to_move();
         self.side_to_move = color.flip();
 
+        self.phase = self.compute_phase();
+        self.pinned[Color::White.index()] = self.compute_pinned_impl(Color::White);
+        self.pinned[Color::Black.index()] = self.compute_pinned_impl(Color::Black);
+
         undo
     }
 
@@ -662,6 +704,8 @@ impl Board {
         self.en_passant = undo.prev_ep;
         self.halfmove_clock = undo.prev_halfmove;
         self.hash = undo.prev_hash;
+        self.phase = undo.prev_phase;
+        self.pinned = undo.prev_pinned;
         self.history.pop();
         self.side_to_move = color;
         self.fullmove_number = if color == Color::Black { self.fullmove_number - 1 } else { self.fullmove_number };
@@ -677,6 +721,8 @@ impl Board {
             prev_ep: self.en_passant,
             prev_halfmove: self.halfmove_clock,
             prev_hash: self.hash,
+            prev_phase: self.phase,
+            prev_pinned: self.pinned,
         };
         self.history.push(self.hash);
         if let Some(ep) = self.en_passant {
@@ -693,6 +739,8 @@ impl Board {
         self.en_passant = undo.prev_ep;
         self.halfmove_clock = undo.prev_halfmove;
         self.hash = undo.prev_hash;
+        self.phase = undo.prev_phase;
+        self.pinned = undo.prev_pinned;
         self.history.pop();
         self.side_to_move = self.side_to_move.flip();
     }

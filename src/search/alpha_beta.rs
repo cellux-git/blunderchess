@@ -1,6 +1,6 @@
 use crate::board::{Board, MAX_MOVES};
 use crate::draw;
-use crate::eval::Eval;
+use crate::eval::EVAL;
 use crate::movegen;
 use crate::search::params::{SearchAlgorithmParams, CHECKMATE};
 use crate::search::quiescence::quiescence;
@@ -23,7 +23,7 @@ pub(crate) fn alpha_beta(
 ) -> i32 {
     state.nodes += 1;
 
-    if ply >= MAX_DEPTH - 1 { return Eval::default().evaluate(board); }
+    if ply >= MAX_DEPTH - 1 { return EVAL.evaluate(board); }
     state.pv_length[ply as usize] = ply as usize;
 
     if state.should_stop() || depth == 0 {
@@ -53,7 +53,10 @@ pub(crate) fn alpha_beta(
     let hash_move = tt_entry.and_then(|e| e.best_move);
 
     let can_null_move = !is_pv && depth >= alg.null_move.min_depth && ply > 0 && !board.in_check();
-    let has_big_pieces = board.piece_list().iter().any(|&(_, p, _)| p != Piece::Pawn && p != Piece::King);
+    let non_pawn_king = board.occupancy()
+        & !board.pieces_bb(Piece::Pawn)
+        & !board.pieces_bb(Piece::King);
+    let has_big_pieces = non_pawn_king != 0;
 
     if can_null_move && has_big_pieces {
         let r = if depth >= alg.null_move.deep_threshold { alg.null_move.r_deep } else { alg.null_move.r_shallow };
@@ -66,7 +69,7 @@ pub(crate) fn alpha_beta(
         }
     }
 
-    let static_eval = if depth <= alg.futility.max_depth { Some(Eval::default().evaluate(board)) } else { None };
+    let static_eval = if depth <= alg.futility.max_depth { Some(EVAL.evaluate(board)) } else { None };
 
     let mut moves_buf = [Move::NULL; MAX_MOVES];
     let mut move_count: usize = 0;
@@ -141,7 +144,9 @@ pub(crate) fn alpha_beta(
                 let is_killer = state.move_ordering.is_killer(mv, ply);
                 let gives_check = board.in_check();
                 if !is_killer && !gives_check {
-                    let r: u8 = if moves_searched >= 8 { alg.lmr.reduction[2] } else if moves_searched >= 5 { alg.lmr.reduction[1] } else { alg.lmr.reduction[0] };
+                    let base_r: u8 = if moves_searched >= 8 { alg.lmr.reduction[2] } else if moves_searched >= 5 { alg.lmr.reduction[1] } else { alg.lmr.reduction[0] };
+                    let hist = state.move_ordering.history_score(mv);
+                    let r = if hist > 2000 { base_r.saturating_sub(1) } else if hist < 200 { base_r + 1 } else { base_r };
                     if depth > r + 1 {
                         let r_depth = depth - 1 - r;
                         score = -alpha_beta(board, -alpha - 1, -alpha, r_depth, ply + 1, state, tt, false, thread_id, alg);

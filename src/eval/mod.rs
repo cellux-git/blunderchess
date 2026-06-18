@@ -9,6 +9,9 @@ mod see;
 
 use crate::board::Board;
 use crate::types::{Color, Piece, Square};
+use std::sync::LazyLock;
+
+pub(crate) static EVAL: LazyLock<Eval> = LazyLock::new(Eval::default);
 
 fn scale_positional(pos: i32, deficit: i32) -> i32 {
     // Only scale when down more than ~2 pawns (200 cp) — a single pawn
@@ -40,23 +43,8 @@ impl Eval {
         (mg_table[idx], eg_table[idx])
     }
 
-    fn game_phase(&self, board: &Board) -> i32 {
-        let mut phase = 0i32;
-        for &(_, piece, _) in board.piece_list() {
-            let weight = match piece {
-                Piece::Knight => 1,
-                Piece::Bishop => 1,
-                Piece::Rook => 2,
-                Piece::Queen => 4,
-                _ => 0,
-            };
-            phase += weight;
-        }
-        phase.min(24)
-    }
-
     pub fn evaluate(&self, board: &Board) -> i32 {
-        let phase = self.game_phase(board);
+        let phase = board.phase();
         let max_phase = 24;
 
         let (w_mat_mg, w_pos_mg, w_mat_eg, w_pos_eg) = self.evaluate_side(board, Color::White);
@@ -94,23 +82,29 @@ impl Eval {
         let _occ = board.occupancy();
         let king_sq = board.king_square(color);
 
-        // material + PST
-        for &(sq, piece, pc) in board.piece_list() {
-            if pc != color { continue; }
-            let val = self.material_value(piece);
-            let (mg_pst, eg_pst) = match piece {
-                Piece::Pawn => self.pst_value(&self.pst.mg_pawn_table, &self.pst.eg_pawn_table, sq, color),
-                Piece::Knight => self.pst_value(&self.pst.mg_knight_table, &self.pst.eg_knight_table, sq, color),
-                Piece::Bishop => self.pst_value(&self.pst.mg_bishop_table, &self.pst.eg_bishop_table, sq, color),
-                Piece::Rook => self.pst_value(&self.pst.mg_rook_table, &self.pst.eg_rook_table, sq, color),
-                Piece::Queen => self.pst_value(&self.pst.mg_queen_table, &self.pst.eg_queen_table, sq, color),
-                Piece::King => self.pst_value(&self.pst.mg_king_table, &self.pst.eg_king_table, sq, color),
+        // material + PST (from bitboards)
+        macro_rules! accumulate {
+            ($piece:ident, $mg_table:ident, $eg_table:ident) => {
+                let val = self.material_value(Piece::$piece);
+                let mut bb = board.pieces_bb(Piece::$piece) & us_bb;
+                while bb != 0 {
+                    let idx = bb.trailing_zeros() as u8;
+                    let sq = Square::new(idx).unwrap();
+                    let (mg_pst, eg_pst) = self.pst_value(&self.pst.$mg_table, &self.pst.$eg_table, sq, color);
+                    mat_mg += val;
+                    mat_eg += val;
+                    pos_mg += mg_pst;
+                    pos_eg += eg_pst;
+                    bb &= bb - 1;
+                }
             };
-            mat_mg += val;
-            mat_eg += val;
-            pos_mg += mg_pst;
-            pos_eg += eg_pst;
         }
+        accumulate!(Pawn, mg_pawn_table, eg_pawn_table);
+        accumulate!(Knight, mg_knight_table, eg_knight_table);
+        accumulate!(Bishop, mg_bishop_table, eg_bishop_table);
+        accumulate!(Rook, mg_rook_table, eg_rook_table);
+        accumulate!(Queen, mg_queen_table, eg_queen_table);
+        accumulate!(King, mg_king_table, eg_king_table);
 
         // pawn structure
         let (m, e) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);

@@ -49,7 +49,7 @@ pub(crate) fn search_worker(
     let max_depth = params.depth.unwrap_or(MAX_DEPTH);
     let start = Instant::now();
     let mut best_result = SearchResult {
-        best_move: None, score: 0, depth: 0, pv: Vec::new(), nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
+        best_move: None, score: 0, depth: 0, pv: Vec::new(), nodes: 0, total_nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
     };
 
     let alg = SearchAlgorithmParams::default();
@@ -151,6 +151,7 @@ pub(crate) fn search_worker(
         best_result.best_move = if count > 0 { Some(buf[0]) } else { None };
     }
     best_result.nodes = state.nodes;
+    best_result.total_nodes = state.nodes;
     best_result.time_ms = start.elapsed().as_millis() as u64;
     best_result
 }

@@ -284,7 +284,7 @@ impl Engine {
             if pondering && !ponderhit.load(Ordering::SeqCst) {
                 return SearchResult {
                     best_move: None, score: 0, depth: 0, pv: Vec::new(),
-                    nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
+                    nodes: 0, total_nodes: 0, time_ms: 0, multi_pv_lines: Vec::new(),
                 };
             }
             result

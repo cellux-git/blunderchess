@@ -38,5 +38,5 @@ These crates provide structured, level-gated logging to stderr. They are:
 
 ## Consequences
 
-- All data structures (TT, board, move list) use standard library collections. The TT uses `Vec` with manual power-of-two indexing rather than a specialized hash table, which is standard for chess engines anyway.
+- All data structures (board, move list) use standard library collections. The TT uses `std::alloc::alloc_zeroed` for 64-byte-aligned allocation (cache-line false sharing avoidance) rather than a specialized hash table, which is standard for chess engines anyway.
 - Adding a dependency later requires justifying it against this ADR.

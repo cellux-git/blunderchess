@@ -66,8 +66,6 @@ pub enum Piece {
     King = 5,
 }
 
-impl Piece {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
     White = 0,

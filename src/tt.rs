@@ -1,8 +1,12 @@
 use crate::types::{Move, MoveKind, Piece};
 use crate::types::Square;
+use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const ENTRY_SIZE: usize = 3;
+const BUCKET_SLOTS: usize = 4;
+const SLOT_U64S: usize = 3;
+const PADDED_U64S: usize = 16; // 128 bytes = 2 cache lines per bucket
 
 fn pack_move(mv: Move) -> u32 {
     let mut packed: u32 = 0;
@@ -63,10 +67,55 @@ pub enum NodeType {
     UpperBound = 2,
 }
 
+struct TTBuffer {
+    ptr: *mut AtomicU64,
+    len: usize,
+    layout: Layout,
+}
+
+impl TTBuffer {
+    fn new(num_u64s: usize) -> Self {
+        let layout = Layout::array::<AtomicU64>(num_u64s)
+            .unwrap()
+            .align_to(64)
+            .unwrap();
+        let ptr = unsafe { alloc_zeroed(layout) } as *mut AtomicU64;
+        assert!(!ptr.is_null(), "TT allocation failed");
+        TTBuffer { ptr, len: num_u64s, layout }
+    }
+}
+
+impl Deref for TTBuffer {
+    type Target = [AtomicU64];
+    fn deref(&self) -> &[AtomicU64] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl DerefMut for TTBuffer {
+    fn deref_mut(&mut self) -> &mut [AtomicU64] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+impl Drop for TTBuffer {
+    fn drop(&mut self) {
+        unsafe { dealloc(self.ptr as *mut u8, self.layout); }
+    }
+}
+
+unsafe impl Send for TTBuffer {}
+unsafe impl Sync for TTBuffer {}
+
 pub struct TT {
-    table: Box<[AtomicU64]>,
+    table: TTBuffer,
     entries_mask: usize,
     age: u8,
+}
+
+#[cfg(test)]
+impl TT {
+    fn num_buckets(&self) -> usize { self.entries_mask + 1 }
 }
 
 unsafe impl Send for TT {}
@@ -74,20 +123,17 @@ unsafe impl Sync for TT {}
 
 impl TT {
     pub fn new(mega_bytes: usize) -> TT {
-        let entry_bytes = ENTRY_SIZE * 8;
-        let max_entries = (mega_bytes * 1024 * 1024) / entry_bytes;
-        let size = max_entries.next_power_of_two().max(1024);
-        let cap = size >> 1;
-        let total = cap * ENTRY_SIZE;
+        let bucket_bytes = PADDED_U64S * 8;
+        let max_buckets = (mega_bytes * 1024 * 1024) / bucket_bytes;
+        let num_buckets = max_buckets.next_power_of_two().max(1024);
+        let total_u64s = num_buckets * PADDED_U64S;
 
-        let mut vec = Vec::with_capacity(total);
-        vec.resize_with(total, || AtomicU64::new(0));
-        let table = vec.into_boxed_slice();
+        let table = TTBuffer::new(total_u64s);
 
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         unsafe {
-            let ptr = table.as_ptr() as u64;
-            let len = (table.len() * 8) as u64;
+            let ptr = table.ptr as u64;
+            let len = (table.len * 8) as u64;
             std::arch::asm!(
                 "syscall",
                 in("rax") 28u64,
@@ -102,7 +148,7 @@ impl TT {
 
         TT {
             table,
-            entries_mask: cap - 1,
+            entries_mask: num_buckets - 1,
             age: 0,
         }
     }
@@ -112,36 +158,35 @@ impl TT {
     }
 
     #[inline]
-    fn entry_offset(&self, hash: u64) -> usize {
-        ((hash as usize) & self.entries_mask) * ENTRY_SIZE
+    fn bucket_base(&self, hash: u64) -> usize {
+        ((hash as usize) & self.entries_mask) * PADDED_U64S
+    }
+
+    #[inline]
+    fn slot_offset(&self, base: usize, slot: usize) -> usize {
+        base + slot * SLOT_U64S
     }
 
     pub fn probe(&self, hash: u64) -> Option<TTProbe> {
-        let base = self.entry_offset(hash);
-        let stored_hash = self.table[base].load(Ordering::Acquire);
-
-        if stored_hash != hash {
-            return None;
+        let base = self.bucket_base(hash);
+        for slot in 0..BUCKET_SLOTS {
+            let offset = self.slot_offset(base, slot);
+            let stored_hash = self.table[offset].load(Ordering::Acquire);
+            if stored_hash == hash {
+                let data = self.table[offset + 1].load(Ordering::Acquire);
+                let mv_packed = self.table[offset + 2].load(Ordering::Acquire);
+                let score = data as i32;
+                let depth = ((data >> 32) & 0xFF) as u8;
+                let node_type = match ((data >> 40) & 0x3) as u8 {
+                    0 => NodeType::Exact,
+                    1 => NodeType::LowerBound,
+                    _ => NodeType::UpperBound,
+                };
+                let best_move = unpack_move(mv_packed as u32);
+                return Some(TTProbe { score, depth, node_type, best_move });
+            }
         }
-
-        let data = self.table[base + 1].load(Ordering::Acquire);
-        let mv_packed = self.table[base + 2].load(Ordering::Acquire);
-
-        let score = data as i32;
-        let depth = ((data >> 32) & 0xFF) as u8;
-        let node_type = match ((data >> 40) & 0x3) as u8 {
-            0 => NodeType::Exact,
-            1 => NodeType::LowerBound,
-            _ => NodeType::UpperBound,
-        };
-        let best_move = unpack_move(mv_packed as u32);
-
-        Some(TTProbe {
-            score,
-            depth,
-            node_type,
-            best_move,
-        })
+        None
     }
 
     pub fn store(
@@ -152,18 +197,47 @@ impl TT {
         node_type: NodeType,
         best_move: Option<Move>,
     ) {
-        let base = self.entry_offset(hash);
+        let base = self.bucket_base(hash);
+        let mut best_slot = 0usize;
+        let mut best_score = i32::MAX; // lower is better for replacement
 
-        let existing_hash = self.table[base].load(Ordering::Relaxed);
-        if existing_hash == hash {
-            let existing_data = self.table[base + 1].load(Ordering::Relaxed);
+        for slot in 0..BUCKET_SLOTS {
+            let offset = self.slot_offset(base, slot);
+            let stored_hash = self.table[offset].load(Ordering::Relaxed);
+
+            if stored_hash == hash {
+                let existing_data = self.table[offset + 1].load(Ordering::Relaxed);
+                let existing_depth = ((existing_data >> 32) & 0xFF) as u8;
+                let existing_age = ((existing_data >> 42) & 0xFF) as u8;
+                if existing_age == self.age && depth < existing_depth {
+                    return;
+                }
+                best_slot = slot;
+                break;
+            }
+
+            if stored_hash == 0 {
+                best_slot = slot;
+                break;
+            }
+
+            let existing_data = self.table[offset + 1].load(Ordering::Relaxed);
             let existing_depth = ((existing_data >> 32) & 0xFF) as u8;
             let existing_age = ((existing_data >> 42) & 0xFF) as u8;
-            if existing_age == self.age && depth < existing_depth {
-                return;
+
+            let replace_score = if existing_age != self.age {
+                (existing_depth as i32) - 512
+            } else {
+                existing_depth as i32
+            };
+
+            if replace_score < best_score {
+                best_score = replace_score;
+                best_slot = slot;
             }
         }
 
+        let offset = self.slot_offset(base, best_slot);
         let data = (score as u64 & 0xFFFF_FFFF)
             | ((depth as u64) << 32)
             | (((node_type as u64) & 0x3) << 40)
@@ -171,9 +245,9 @@ impl TT {
 
         let mv_packed = best_move.map(|m| pack_move(m) as u64).unwrap_or(0);
 
-        self.table[base + 1].store(data, Ordering::Release);
-        self.table[base + 2].store(mv_packed, Ordering::Release);
-        self.table[base].store(hash, Ordering::Release);
+        self.table[offset + 1].store(data, Ordering::Release);
+        self.table[offset + 2].store(mv_packed, Ordering::Release);
+        self.table[offset].store(hash, Ordering::Release);
     }
 }
 
@@ -270,5 +344,53 @@ mod tests {
         assert_eq!(unpacked.to(), original.to());
         assert_eq!(unpacked.promotion_piece(), original.promotion_piece());
         assert_eq!(unpacked.kind(), original.kind());
+    }
+
+    #[test]
+    fn test_bucket_collision_still_finds() {
+        let tt = TT::new(1);
+        let mv = crate::types::Move::new(
+            Square::from_file_rank(4, 1).unwrap(),
+            Square::from_file_rank(4, 3).unwrap(),
+        );
+        let buckets = tt.num_buckets() as u64;
+        let h1 = 0x100;
+        let h2 = 0x100 + buckets;
+        let h3 = 0x100 + buckets * 2;
+        let h4 = 0x100 + buckets * 3;
+
+        tt.store(h1, 10, 1, NodeType::Exact, Some(mv));
+        tt.store(h2, 20, 2, NodeType::Exact, Some(mv));
+        tt.store(h3, 30, 3, NodeType::Exact, Some(mv));
+        tt.store(h4, 40, 4, NodeType::Exact, Some(mv));
+
+        assert_eq!(tt.probe(h1).unwrap().score, 10);
+        assert_eq!(tt.probe(h2).unwrap().score, 20);
+        assert_eq!(tt.probe(h3).unwrap().score, 30);
+        assert_eq!(tt.probe(h4).unwrap().score, 40);
+    }
+
+    #[test]
+    fn test_bucket_overflow_replaces_worst() {
+        let tt = TT::new(1);
+        let mv = crate::types::Move::new(
+            Square::from_file_rank(4, 1).unwrap(),
+            Square::from_file_rank(4, 3).unwrap(),
+        );
+        let buckets = tt.num_buckets() as u64;
+        // Fill all 4 slots
+        for i in 0..4u64 {
+            tt.store(0x200 + i * buckets, 10 + i as i32, 1, NodeType::Exact, Some(mv));
+        }
+        // Add a 5th entry to the same bucket — should replace the lowest depth
+        tt.store(0x200 + 4 * buckets, 50, 5, NodeType::Exact, Some(mv));
+        // The lowest-depth entry (score 10, depth 1) should be gone
+        // One of the depth-1 entries should be evicted
+        let found: Vec<_> = (0..5u64)
+            .filter_map(|i| tt.probe(0x200 + i * buckets))
+            .map(|e| e.score)
+            .collect();
+        assert_eq!(found.len(), 4);
+        assert!(found.contains(&50), "New entry should be present");
     }
 }

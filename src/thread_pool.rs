@@ -59,6 +59,20 @@ impl ThreadPool {
         }
         self.inner.condvar.notify_one();
     }
+
+    pub fn execute_batch<I>(&self, jobs: I)
+    where
+        I: IntoIterator,
+        I::Item: FnOnce() + Send + 'static,
+    {
+        {
+            let mut queue = self.inner.queue.lock().unwrap();
+            for job in jobs {
+                queue.push_back(Message::Run(Box::new(job)));
+            }
+        }
+        self.inner.condvar.notify_all();
+    }
 }
 
 impl Drop for ThreadPool {

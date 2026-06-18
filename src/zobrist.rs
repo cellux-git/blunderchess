@@ -72,7 +72,7 @@ pub fn zobrist_castling(rights: CastlingRights) -> u64 {
 #[inline]
 pub fn zobrist_en_passant(file: Option<u8>) -> u64 {
     match file {
-        Some(f) if f < 8 => ZOBRIST_KEYS[ep_file_index(f)],
+        Some(f) => ZOBRIST_KEYS[ep_file_index(f)],
         _ => 0,
     }
 }

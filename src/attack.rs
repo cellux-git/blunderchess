@@ -242,6 +242,67 @@ const BISHOP_SHIFTS: [u8; 64] = [
     58, 59, 59, 59, 59, 59, 59, 58,
 ];
 
+const ROOK_MASKS: [u64; 64] = precompute_rook_masks();
+const BISHOP_MASKS: [u64; 64] = precompute_bishop_masks();
+
+const fn precompute_rook_masks() -> [u64; 64] {
+    let mut masks = [0u64; 64];
+    let mut sq = 0u8;
+    while sq < 64 {
+        masks[sq as usize] = rook_mask_const(sq);
+        sq += 1;
+    }
+    masks
+}
+
+const fn precompute_bishop_masks() -> [u64; 64] {
+    let mut masks = [0u64; 64];
+    let mut sq = 0u8;
+    while sq < 64 {
+        masks[sq as usize] = bishop_mask_const(sq);
+        sq += 1;
+    }
+    masks
+}
+
+const fn rook_mask_const(sq: u8) -> u64 {
+    let f = sq % 8;
+    let r = sq / 8;
+    let mut mask: u64 = 0;
+    let mut rf = f + 1;
+    while rf < 7 { mask |= 1u64 << (r * 8 + rf); rf += 1; }
+    let mut lf: i32 = f as i32 - 1;
+    while lf > 0 { mask |= 1u64 << (r * 8 + lf as u8); lf -= 1; }
+    let mut ur = r + 1;
+    while ur < 7 { mask |= 1u64 << (ur * 8 + f); ur += 1; }
+    let mut dr: i32 = r as i32 - 1;
+    while dr > 0 { mask |= 1u64 << (dr as u8 * 8 + f); dr -= 1; }
+    mask
+}
+
+const fn bishop_mask_const(sq: u8) -> u64 {
+    let f = sq % 8;
+    let r = sq / 8;
+    let mut mask: u64 = 0;
+    let mut i: i32 = 1;
+    while i < 8 {
+        let ff = f as i32 + i;
+        let rr = r as i32 + i;
+        if ff < 7 && rr < 7 { mask |= 1u64 << ((rr as u8) * 8 + (ff as u8)); }
+        let ff2 = f as i32 + i;
+        let rr2 = r as i32 - i;
+        if ff2 < 7 && rr2 > 0 { mask |= 1u64 << ((rr2 as u8) * 8 + (ff2 as u8)); }
+        let ff3 = f as i32 - i;
+        let rr3 = r as i32 + i;
+        if ff3 > 0 && rr3 < 7 { mask |= 1u64 << ((rr3 as u8) * 8 + (ff3 as u8)); }
+        let ff4 = f as i32 - i;
+        let rr4 = r as i32 - i;
+        if ff4 > 0 && rr4 > 0 { mask |= 1u64 << ((rr4 as u8) * 8 + (ff4 as u8)); }
+        i += 1;
+    }
+    mask
+}
+
 fn rook_mask(sq: u8) -> u64 {
     let f = sq % 8;
     let r = sq / 8;
@@ -350,7 +411,7 @@ fn bishop_attacks_slow(sq: u8, blockers: u64) -> u64 {
 #[inline]
 pub fn rook_attacks(sq: u8, occ: u64) -> u64 {
     let t = tables();
-    let mask = rook_mask(sq);
+    let mask = ROOK_MASKS[sq as usize];
     let magic = ROOK_MAGICS[sq as usize];
     let shift = ROOK_SHIFTS[sq as usize];
     let idx = t.rook_offsets[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;
@@ -360,7 +421,7 @@ pub fn rook_attacks(sq: u8, occ: u64) -> u64 {
 #[inline]
 pub fn bishop_attacks(sq: u8, occ: u64) -> u64 {
     let t = tables();
-    let mask = bishop_mask(sq);
+    let mask = BISHOP_MASKS[sq as usize];
     let magic = t.bishop_magics[sq as usize];
     let shift = BISHOP_SHIFTS[sq as usize];
     let idx = t.bishop_offsets[sq as usize] + (((occ & mask).wrapping_mul(magic)) >> shift) as usize;

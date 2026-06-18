@@ -158,14 +158,13 @@ fn bench_nps_vs_depth() {
     let tt = Arc::new(TT::new(16));
     let stop = Arc::new(AtomicBool::new(false));
     println!("=== NPS vs Depth (startpos, 1 thread, shared TT) ===");
-    // Run iterative deepening like the real engine: reuse TT across depths
     for depth in 3..=10 {
         let params = SearchParams::with_depth(depth);
         let start = Instant::now();
         let result = search(&board, &params, &stop, &tt, None);
         let ms = start.elapsed().as_millis() as u64;
-        let nps = if ms > 0 { result.nodes * 1000 / ms } else { 0 };
-        println!("  depth {:2}: {:>8} nodes {:>5}ms {:>8} nps", depth, result.nodes, ms, nps);
+        let nps = if ms > 0 { result.total_nodes * 1000 / ms } else { 0 };
+        println!("  depth {:2}: {:>8} nodes {:>5}ms {:>8} nps", depth, result.total_nodes, ms, nps);
         if depth <= 5 { assert!(ms < 500, "Depth {depth} too slow: {ms}ms"); }
         if depth >= 6 { assert!(nps >= 100_000, "Depth {depth} NPS too low: {nps}"); }
     }
@@ -181,18 +180,23 @@ fn bench_thread_scaling() {
         return;
     }
     let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
-    let pool = ThreadPool::new(4);
-    println!("=== Thread Scaling (startpos, depth 8) ===");
-    for threads in [1, 2, 4] {
+    let pool = ThreadPool::new(16);
+    println!("=== Thread Scaling (startpos, depth 8, TT scaled 8MB × threads, fresh per run) ===");
+    for threads in [1, 2, 4, 8, 16] {
         let mut params = SearchParams::with_depth(8);
         params.threads = threads;
+        let tt_mb = 8 * threads as usize;
         let stop = Arc::new(AtomicBool::new(false));
-        let tt = Arc::new(TT::new(16));
+        let tt = Arc::new(TT::new(tt_mb));
         let start = Instant::now();
         let result = search(&board, &params, &stop, &tt, Some(&pool));
         let ms = start.elapsed().as_millis() as u64;
-        let nps = if ms > 0 { result.nodes * 1000 / ms } else { 0 };
-        println!("  t{threads}: {:>8} nodes {:>5}ms {:>8} nps", result.nodes, ms, nps);
+        let nps = if ms > 0 { result.total_nodes * 1000 / ms } else { 0 };
+        let best_str = result.best_move.map(|m| format!("{m}")).unwrap_or_default();
+        println!(
+            "  t{:>2}: {:>2}MB TT  total={:>8} nodes {:>5}ms  total_nps={:>8}  best={}",
+            threads, tt_mb, result.total_nodes, ms, nps, best_str,
+        );
     }
 }
 
@@ -228,6 +232,35 @@ fn tactical_avoid_queen_trap() {
         }
     }
     assert!(reasonable, "Engine score should be reasonable (not catastrophic) in queen trap position");
+}
+
+#[test]
+#[ignore]
+fn bench_deep_thread_scaling() {
+    init_slider_tables();
+    let is_release = !cfg!(debug_assertions);
+    if !is_release {
+        println!("=== Deep Thread Scaling [SKIPPED in debug — use --release] ===");
+        return;
+    }
+    let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
+    let pool = ThreadPool::new(16);
+    for depth in [10u8, 12] {
+        for threads in [1u8, 16] {
+            let tt_mb = 8 * threads as usize;
+            let mut params = SearchParams::with_depth(depth);
+            params.threads = threads;
+            let stop = Arc::new(AtomicBool::new(false));
+            let tt = Arc::new(TT::new(tt_mb));
+            let start = Instant::now();
+            let result = search(&board, &params, &stop, &tt, Some(&pool));
+            let ms = start.elapsed().as_millis() as u64;
+            let nps = if ms > 0 { result.total_nodes * 1000 / ms } else { 0 };
+            println!("  depth {}  t{:>2}: {:>3}MB TT  total={:>10} nodes {:>6}ms  total_nps={:>10}  best={:?}",
+                depth, threads, tt_mb, result.total_nodes, ms, nps,
+                result.best_move.map(|m| format!("{m}")));
+        }
+    }
 }
 
 #[test]

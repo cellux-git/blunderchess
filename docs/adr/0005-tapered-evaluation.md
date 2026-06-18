@@ -43,7 +43,7 @@ All weights live on `Eval` as public fields, enabling:
 - A/B testing of parameter changes without recompilation (future)
 - `Eval::default()` returns the PeSTO baseline
 
-The `Eval` struct is constructed once and cached in a `OnceLock<Eval>` static. The public `evaluate(board)` function uses this default, eliminating per-call heap/stack allocation overhead.
+The `Eval` struct is constructed once and cached in a `LazyLock<Eval>` static. The public `EVAL.evaluate(board)` call uses this default, eliminating per-call heap/stack allocation overhead.
 
 ### Static Exchange Evaluation (SEE)
 
@@ -59,7 +59,7 @@ Precomputed attack tables (knight, king, pawn) and magic slider tables live in a
 
 - **Tapered eval**: The standard approach for handcrafted evaluations. Midgame and endgame positions require different piece-square tables and positional weights. Linear interpolation between the two is simple, fast, and effective.
 - **PeSTO PSTs**: Well-known, open-source tables that provide reasonable positional play out of the box.
-- **`OnceLock` static**: Eliminates per-call allocation (previously `Eval::default()` was called on every `evaluate()` invocation, copying ~3KB of stack data). The `OnceLock` pattern initializes once and serves immutable references thereafter.
+- **`LazyLock` static**: Eliminates per-call allocation (previously `Eval::default()` was called on every `evaluate()` invocation, copying ~3KB of stack data). The `LazyLock<Eval>` static initializes once and serves immutable references thereafter.
 - **SEE replaces MVV-LVA**: MVV-LVA is a heuristic (victim value × 10 − attacker value) that doesn't account for recaptures. SEE correctly identifies losing exchanges (e.g., Q×R when opponent recaptures with a pawn). This improves both move ordering accuracy and q-search efficiency.
 
 ## Considered options

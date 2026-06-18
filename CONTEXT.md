@@ -1,6 +1,6 @@
 # BlunderChess
 
-A hobby chess engine. Uses mailbox board with bitboard attack detection, piece-square table evaluation with tapered midgame/endgame blending, alpha-beta search with Lazy SMP.
+A hobby chess engine. Uses hybrid mailbox/bitboard board with bitboard attack detection and move generation, piece-square table evaluation with tapered midgame/endgame blending, alpha-beta search with Lazy SMP.
 
 ## Language
 
@@ -16,13 +16,13 @@ _Avoid_: 0x88 (related mailbox variant, not used)
 
 **Make move / unmake move**: `Board::make_move(&mut self) -> UndoInfo`, `unmake_move(&undo)`. Stack-allocated `UndoInfo` stores all state needed to reverse the move. No per-node Board clone.
 
-**Search**: Alpha-beta with PVS, iterative deepening, quiescence search (captures only with stand-pat), null move pruning, killer moves (2 per depth), and history heuristic (64×64 table).
+**Search**: Alpha-beta with PVS, iterative deepening, quiescence search (captures only with stand-pat and SEE pruning of losing captures), null move pruning, killer moves (2 per depth), history heuristic (64×64 table with gravity aging), and history-based Late Move Reductions (LMR).
 
-**Quiescence search** ("q-search"): A restricted search that only explores captures at the horizon, preventing the engine from thinking an arbitrary capture sequence ends the line. Uses stand-pat (return static eval if it already beats beta).
+**Quiescence search** ("q-search"): A restricted search that only explores captures and checks at the horizon. Uses stand-pat (return static eval if it already beats beta) and prunes losing captures (SEE < 0) to limit node explosion. When not in check, generates pseudo-legal moves and filters with trivial-legality shortcuts (same pattern as alpha-beta).
 
 **Iterative deepening**: Searching to depth 1, then 2, 3, ... until time runs out. Each completed iteration provides a result immediately; the search is interruptible via a stop flag. Enables time management.
 
-**Transposition table (TT)**: Lock-free hash table mapping Zobrist hash → packed entry. 3× `AtomicU64` per bucket with Acquire/Release ordering. Depth-preferred + age-based replacement. Selective store (skip depth-1 fail-lows). Huge pages via `madvise` on the 64MB allocation.
+**Transposition table (TT)**: Lock-free hash table mapping Zobrist hash → packed entry. 4-way associative buckets (4 slots × 3 `AtomicU64` each) with 128-byte padding to avoid cache-line false sharing. 64-byte-aligned allocation via `std::alloc`. Acquire/Release ordering. Depth-preferred + age-based replacement. Huge pages via `madvise` on the allocation.
 
 **Principal Variation (PV)**: The sequence of best moves found by the search. Collected via a triangular PV array during search.
 
@@ -104,10 +104,10 @@ All depend transitively on types ◄────────────┘─�
 
 | Boundary | Signature | Notes |
 |----------|-----------|-------|
-| Movegen | `fn generate_moves(board: &Board, moves: &mut [Move; 218]) -> usize` | Pseudo-legal, stack buffer |
-| Eval | `fn evaluate(board: &Board) -> i32` | Free function, PST + material + tapered blending |
+| Movegen | `fn generate_pseudo_legal(board: &Board, moves: &mut [Move; 218], cnt: &mut usize)` / `fn generate_legal_moves(board: &Board, moves: &mut [Move; 218]) -> usize` | Bitboard-based, stack buffer |
+| Eval | `EVAL.evaluate(board: &Board) -> i32` | Global `LazyLock<Eval>` static, PST + material + tapered blending |
 | Search | `fn search(board: &Board, params: &SearchParams, stop: &AtomicBool) -> SearchResult` | Lazy SMP worker |
-| TT | `fn probe(tt: &TT, hash: u64) -> Option<TTEntry>` / `fn store(tt: &TT, hash: u64, entry: TTEntry)` | Lock-free, `&self` only |
+| TT | `fn probe(&self, hash: u64) -> Option<TTProbe>` / `fn store(&self, hash: u64, ...)` | Lock-free, 4-way associative, `&self` only |
 | Make/Unmake | `fn make_move(&mut self, mv: Move) -> UndoInfo` / `fn unmake_move(&mut self, undo: &UndoInfo)` | In-place, no clone |
 
 ### Threading model
@@ -131,12 +131,12 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
   Construct with defaults or custom values for tuning. Each sub-struct is independently testable.
 - **`SearchParams` struct**: UCI-level options (depth, movetime, infinite, threads, multi_pv, ponder). Pass by reference.
 - **`SearchAlgorithmParams` struct**: Algorithmic tuning knobs, nested into **LmrConfig** (min depth, move threshold, reduction table), **NullMoveConfig** (min depth, R values), **AspirationConfig** (initial delta, depth threshold), and **FutilityConfig** (max depth, margins). Passed alongside SearchParams into search.
-- **`MoveOrdering` struct**: Owns killer-move table (2 slots/depth) and history heuristic (64×64 table). Provides `order_moves()` and `order_moves_q()`. Testable independently of alpha-beta.
+- **`MoveOrdering` struct**: Owns killer-move table (2 slots/depth) and history heuristic (64×64 table with gravity aging — all entries decay when any reaches 16,384). Provides `order_moves()` (stack-array insertion sort), `order_moves_q()` (SEE + check ordering), and `history_score()` (used by history-based LMR).
 - **`Engine` facade**: Wires Board + Eval + Search + TT + UCI behind a single public entry point (`process_command`). Internal state is private; integration tests use `search_position(board, depth)`.
 
 ## Test coverage
 
-136 tests across 12 modules (126 unit + 10 integration; all pass):
+140 tests across 12 modules (128 unit + 12 integration; all pass):
 
 | Module | Count | Key areas tested |
 |--------|-------|-----------------|
@@ -144,38 +144,50 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 | `movegen.rs` | 14 | 6 CPW perft positions (d1-3), pinned pieces, en passant discovery, castling through check, double check, promotion underpromotion, stalemate |
 | `search.rs` | 15 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke, Bb4+ knight trap avoidance, passive f7f6 avoidance |
 | `eval.rs` | 13 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights (+rim/trapped, +requires pawn defense), connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend, development-vs-passive-pawn-push |
-| `tt.rs` | 5 | Probe/store roundtrip, misses, depth-preferred replacement, age-based, move pack |
+| `tt.rs` | 7 | Probe/store roundtrip, misses, depth-preferred replacement, age-based, move pack, 4-slot bucket collision, overflow eviction |
 | `types.rs` | 13 | Move packing (all kinds), Square bounds, Color flip, Move::NULL, CastlingRights |
 | `uci.rs` | 6 | Parse UCI move roundtrip, position startpos/FEN/moves, go depth, invalid input |
 | `zobrist.rs` | 3 | Incremental hash matches full, hash changes after move, side-to-move toggle |
-| `tests/benchmarks.rs` | 10 | Tactical: Scholar's Mate, back-rank mate, hanging queen, promotion, smothered mate, mate-in-2, pin, discovered attack, depth convergence. 3 ignored perf benchmarks. |
+| `tests/benchmarks.rs` | 10 | Tactical: Scholar's Mate, back-rank mate, hanging queen, promotion, smothered mate, mate-in-2, pin, discovered attack, depth convergence. 4 ignored perf benchmarks (NPS vs depth, thread scaling, deep thread scaling, perft speed). |
 
 ## Performance (release build, startpos, 1 thread, shared TT)
 
 | Depth | Nodes | Time (ms) | NPS |
 |-------|-------|-----------|-----|
-| 3 | 1,606 | 7 | 229K |
-| 4 | 4,311 | 28 | 154K |
-| 5 | 8,270 | 52 | 159K |
-| 6 | 43,544 | 339 | 128K |
-| 7 | 49,563 | 374 | 133K |
-| 8 | 348,997 | 2,929 | 119K |
-| 9 | 190,363 | 1,606 | 119K |
-| 10 | 2,989,937 | 26,605 | 112K |
+| 3 | 4,722 | 9 | 525K |
+| 4 | 20,981 | 47 | 446K |
+| 5 | 42,034 | 74 | 568K |
+| 6 | 98,860 | 124 | 797K |
+| 7 | 145,036 | 161 | 901K |
+| 8 | 360,706 | 468 | 771K |
+| 9 | 1,068,663 | 1,354 | 789K |
+| 10 | 5,315,513 | 7,583 | 701K |
 
-Steady ~120K NPS. Node counts wobble at depth 7-9 due to shared TT (shallower iterations fill the table, reducing deeper search work).
+Steady ~750K+ NPS at depth 6+. The bitboard movegen, cached phase/pinned, precomputed attack masks, and LMR + SEE pruning improvements combined for ~30% throughput gain and substantially fewer nodes per depth (e.g., depth-8 from 505K → 360K nodes).
 
 ## Lazy SMP scaling data
 
-Release build, startpos, depth 8, fresh TT per run:
+Release build, startpos, depth 8. TT size scales 8 MB × thread count to prevent thrashing. Fresh TT per run. Total NPS is summed across all threads.
 
-| Threads | Nodes | Time (ms) | vs t1 |
-|---------|-------|-----------|-------|
-| 1 | 485,444 | 3,923 | 1.00× |
-| 2 | 331,859 | 2,857 | 1.37× faster |
-| 4 | 331,422 | 2,884 | 1.36× faster |
+| Threads | TT (MB) | Total nodes | Time (ms) | Total NPS | vs t1 | Efficiency |
+|---------|---------|-------------|-----------|-----------|-------|------------|
+| 1 | 8 | 1,443,561 | 1,903 | 759K | 1.00× | 100% |
+| 2 | 16 | 2,314,519 | 1,610 | 1,438K | 1.89× | 95% |
+| 4 | 32 | 3,510,510 | 1,241 | 2,829K | 3.73× | 93% |
+| 8 | 64 | 4,500,685 | 936 | 4,808K | 6.34× | 79% |
+| 16 | 128 | 5,887,247 | 949 | 6,204K | 8.18× | 51% |
 
-2-4 threads provide a ~1.37× speedup at depth 8. TT sharing reduces total nodes (32% fewer with 2+ threads).
+Scaling is near-linear through 4 threads (93%+ efficiency), remains strong at 8 (79%), then drops at 16 (51%) as cache coherence overhead on the shared TT dominates.
+
+### Deep scaling (16 threads vs 1 thread by search depth)
+
+| Depth | 1T NPS | 16T NPS | Speedup | Efficiency | 1T nodes | 1T time |
+|-------|--------|---------|---------|------------|----------|---------|
+| 8 | 759K | 6,204K | 8.18× | 51% | 1.4M | 1.9s |
+| 10 | 734K | 4,676K | 6.37× | 40% | 5.8M | 7.9s |
+| 12 | 765K | 5,864K | 7.67× | 48% | 22.4M | 29.3s |
+
+The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. Bitboard movegen, cached phase/pinned, precomputed attack masks, and history-based LMR all contribute to the per-thread throughput improvement.
 
 ## Perft speed (kiwipete, release)
 
@@ -183,4 +195,4 @@ Release build, startpos, depth 8, fresh TT per run:
 |-------|-------|-----------|-----|
 | 1 | 48 | <1 | — |
 | 2 | 2,039 | <1 | — |
-| 3 | 97,862 | 20 | 4.9M |
+| 3 | 97,862 | 35 | 2.8M |

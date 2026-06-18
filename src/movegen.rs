@@ -1,4 +1,4 @@
-use crate::attack::{bishop_attacks, queen_attacks, rook_attacks};
+use crate::attack::{bishop_attacks, rook_attacks};
 use crate::board::{Board, MAX_MOVES};
 use crate::types::{Color, Move, Piece, Square};
 
@@ -23,189 +23,243 @@ pub fn generate_legal_moves(board: &Board, moves: &mut [Move; MAX_MOVES]) -> usi
 
 pub fn generate_pseudo_legal(board: &Board, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
     let side = board.side_to_move();
-    generate_pawn_moves(board, side, moves, count);
-    generate_knight_moves(board, side, moves, count);
-    generate_sliding_moves(board, side, moves, count);
-    generate_king_moves(board, side, moves, count);
+    let us_bb = board.colors_bb(side);
+    let them_bb = board.colors_bb(side.flip());
+    let occ = board.occupancy();
+    let ep = board.en_passant();
+
+    generate_pawn_moves(board, side, us_bb, them_bb, occ, ep, moves, count);
+    generate_knight_moves(board, side, us_bb, them_bb, moves, count);
+    generate_sliding_moves(board, side, us_bb, them_bb, occ, moves, count);
+    generate_king_moves(board, side, us_bb, them_bb, moves, count);
 }
 
-fn generate_pawn_moves(board: &Board, color: Color, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
-    for &(sq, piece, pc) in board.piece_list() {
-        if pc != color || piece != Piece::Pawn { continue; }
-        let rank = sq.rank();
-        let dir: i8 = if color == Color::White { 1 } else { -1 };
-        let start_rank: u8 = if color == Color::White { 1 } else { 6 };
-        let promo_rank: u8 = if color == Color::White { 6 } else { 1 };
+fn generate_pawn_moves(
+    board: &Board, color: Color,
+    us_bb: u64, them_bb: u64, occ: u64, ep: Option<Square>,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let pawns = board.pieces_bb(Piece::Pawn) & us_bb;
+    if pawns == 0 { return; }
+
+    let dir: i32 = if color == Color::White { 8 } else { -8 };
+    let start_rank_shift: i32 = if color == Color::White { 8 } else { 48 };
+    let promo_rank_shift: i32 = if color == Color::White { 48 } else { 8 };
+    let promo_pieces = [Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen];
+
+    let mut bb = pawns;
+    while bb != 0 {
+        let sq_idx = bb.trailing_zeros() as i32;
+        let sq = Square::new(sq_idx as u8).unwrap();
+        bb &= bb - 1;
+
+        let rank = sq_idx >> 3;
 
         // single push
-        if let Some(fwd) = sq_offset(sq, 0, dir) {
-            if board.empty_square(fwd) {
-                if rank == promo_rank {
-                    for &p in &[Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
-                        moves[*count] = Move::promotion(sq, fwd, p);
-                        *count += 1;
-                    }
-                } else {
-                    moves[*count] = Move::new(sq, fwd);
+        let fwd_idx = sq_idx + dir;
+        if fwd_idx >= 0 && fwd_idx < 64 && ((1u64 << fwd_idx) & occ) == 0 {
+            let fwd = Square::new(fwd_idx as u8).unwrap();
+            if rank == (promo_rank_shift >> 3) {
+                for &p in &promo_pieces {
+                    moves[*count] = Move::promotion(sq, fwd, p);
                     *count += 1;
-                    // double push
-                    if rank == start_rank {
-                        if let Some(dbl) = sq_offset(sq, 0, dir * 2) {
-                            if board.empty_square(dbl) {
-                                moves[*count] = Move::new(sq, dbl);
-                                *count += 1;
-                            }
-                        }
+                }
+            } else {
+                moves[*count] = Move::new(sq, fwd);
+                *count += 1;
+                // double push
+                if rank == (start_rank_shift >> 3) {
+                    let dbl_idx = sq_idx + dir * 2;
+                    if dbl_idx >= 0 && dbl_idx < 64 && ((1u64 << dbl_idx) & occ) == 0 {
+                        moves[*count] = Move::new(sq, Square::new(dbl_idx as u8).unwrap());
+                        *count += 1;
                     }
                 }
             }
         }
 
         // attacks
-        for &df in &[-1i8, 1i8] {
-            if let Some(diag) = sq_offset(sq, df, dir) {
-                if let Some(tc) = board.color_at(diag) {
-                    if tc != color {
-                        if rank == promo_rank {
-                            for &p in &[Piece::Knight, Piece::Bishop, Piece::Rook, Piece::Queen] {
-                                moves[*count] = Move::promotion(sq, diag, p);
-                                *count += 1;
-                            }
-                        } else {
-                            moves[*count] = Move::capture(sq, diag);
-                            *count += 1;
-                        }
-                    }
-                } else if let Some(ep) = board.en_passant() {
-                    if diag == ep {
-                        moves[*count] = Move::ep(sq, diag);
-                        *count += 1;
-                    }
+        let attacks = crate::attack::pawn_attacks(sq, color);
+        let captures = attacks & them_bb;
+        let mut caps = captures;
+        while caps != 0 {
+            let cap_idx = caps.trailing_zeros() as u8;
+            caps &= caps - 1;
+            let to = Square::new(cap_idx).unwrap();
+            if rank == (promo_rank_shift >> 3) {
+                for &p in &promo_pieces {
+                    moves[*count] = Move::promotion(sq, to, p);
+                    *count += 1;
                 }
-            }
-        }
-    }
-}
-
-fn generate_knight_moves(board: &Board, color: Color, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
-    for &(sq, piece, pc) in board.piece_list() {
-        if pc != color || piece != Piece::Knight { continue; }
-        let offsets: [(i8, i8); 8] = [
-            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-            (1, -2), (1, 2), (2, -1), (2, 1),
-        ];
-        for &(df, dr) in &offsets {
-            if let Some(target) = sq_offset(sq, df, dr) {
-                match board.color_at(target) {
-                    None => { moves[*count] = Move::new(sq, target); *count += 1; }
-                    Some(c) if c != color => { moves[*count] = Move::capture(sq, target); *count += 1; }
-                    _ => {}
-                }
-            }
-        }
-    }
-}
-
-fn sq_offset(sq: Square, df: i8, dr: i8) -> Option<Square> {
-    let f = sq.file() as i8 + df;
-    let r = sq.rank() as i8 + dr;
-    if f >= 0 && f < 8 && r >= 0 && r < 8 { Some(Square::from_file_rank(f as u8, r as u8).unwrap()) } else { None }
-}
-
-fn generate_sliding_moves(board: &Board, color: Color, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
-    let friendly = board.colors_bb(color);
-    let enemy = board.colors_bb(color.flip());
-    let occ = board.occupancy();
-
-    for &(sq, piece, pc) in board.piece_list() {
-        if pc != color { continue; }
-        let attacks: u64 = match piece {
-            Piece::Bishop => bishop_attacks(sq.index(), occ),
-            Piece::Rook => rook_attacks(sq.index(), occ),
-            Piece::Queen => queen_attacks(sq.index(), occ),
-            _ => continue,
-        };
-        let mut bb = attacks & !friendly;
-        while bb != 0 {
-            let lsb = bb.trailing_zeros() as u8;
-            bb &= bb - 1;
-            let to = Square::new(lsb).unwrap();
-            if enemy & (1u64 << lsb) != 0 {
-                moves[*count] = Move::capture(sq, to);
             } else {
-                moves[*count] = Move::new(sq, to);
+                moves[*count] = Move::capture(sq, to);
+                *count += 1;
             }
+        }
+
+        // en passant
+        if let Some(ep_sq) = ep {
+            if (attacks & (1u64 << ep_sq.index())) != 0 {
+                moves[*count] = Move::ep(sq, ep_sq);
+                *count += 1;
+            }
+        }
+    }
+}
+
+fn generate_knight_moves(
+    _board: &Board, _color: Color,
+    us_bb: u64, them_bb: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let knights = _board.pieces_bb(Piece::Knight) & us_bb;
+    let mut bb = knights;
+    while bb != 0 {
+        let sq_idx = bb.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        bb &= bb - 1;
+        let attacks = crate::attack::knight_attacks(sq);
+        let quiet = attacks & !(us_bb | them_bb);
+        let captures = attacks & them_bb;
+        let mut q = quiet;
+        while q != 0 {
+            let to_idx = q.trailing_zeros() as u8;
+            q &= q - 1;
+            moves[*count] = Move::new(sq, Square::new(to_idx).unwrap());
+            *count += 1;
+        }
+        let mut c = captures;
+        while c != 0 {
+            let to_idx = c.trailing_zeros() as u8;
+            c &= c - 1;
+            moves[*count] = Move::capture(sq, Square::new(to_idx).unwrap());
             *count += 1;
         }
     }
 }
 
-fn generate_king_moves(board: &Board, color: Color, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
-    for &(sq, piece, pc) in board.piece_list() {
-        if pc != color || piece != Piece::King { continue; }
-        // ... rest of king moves
-        let offsets: [(i8, i8); 8] = [
-            (-1, -1), (-1, 0), (-1, 1), (0, -1),
-            (0, 1), (1, -1), (1, 0), (1, 1),
-        ];
-        for &(df, dr) in &offsets {
-            if let Some(target) = sq_offset(sq, df, dr) {
-                match board.color_at(target) {
-                    None => { moves[*count] = Move::new(sq, target); *count += 1; }
-                    Some(c) if c != color => { moves[*count] = Move::capture(sq, target); *count += 1; }
-                    _ => {}
-                }
+fn generate_sliding_moves(
+    _board: &Board, _color: Color,
+    us_bb: u64, them_bb: u64, occ: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    let bishops = _board.pieces_bb(Piece::Bishop) & us_bb;
+    let rooks = _board.pieces_bb(Piece::Rook) & us_bb;
+    let queens = _board.pieces_bb(Piece::Queen) & us_bb;
+
+    // bishops + queens (diagonal)
+    let mut diag = bishops | queens;
+    while diag != 0 {
+        let sq_idx = diag.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        diag &= diag - 1;
+        let attacks = bishop_attacks(sq_idx, occ) & !us_bb;
+        push_slider_moves(sq, attacks, them_bb, moves, count);
+    }
+
+    // rooks + queens (orthogonal)
+    let mut ortho = rooks | queens;
+    while ortho != 0 {
+        let sq_idx = ortho.trailing_zeros() as u8;
+        let sq = Square::new(sq_idx).unwrap();
+        ortho &= ortho - 1;
+        let attacks = rook_attacks(sq_idx, occ) & !us_bb;
+        push_slider_moves(sq, attacks, them_bb, moves, count);
+    }
+}
+
+#[inline]
+fn push_slider_moves(from: Square, attacks: u64, them_bb: u64, moves: &mut [Move; MAX_MOVES], count: &mut usize) {
+    let captures = attacks & them_bb;
+    let quiets = attacks & !them_bb;
+    let mut bb = captures;
+    while bb != 0 {
+        let lsb = bb.trailing_zeros() as u8;
+        bb &= bb - 1;
+        moves[*count] = Move::capture(from, Square::new(lsb).unwrap());
+        *count += 1;
+    }
+    let mut bb = quiets;
+    while bb != 0 {
+        let lsb = bb.trailing_zeros() as u8;
+        bb &= bb - 1;
+        moves[*count] = Move::new(from, Square::new(lsb).unwrap());
+        *count += 1;
+    }
+}
+
+fn generate_king_moves(
+    board: &Board, color: Color,
+    us_bb: u64, them_bb: u64,
+    moves: &mut [Move; MAX_MOVES], count: &mut usize,
+) {
+    if board.pieces_bb(Piece::King) & us_bb == 0 { return; }
+    let king_sq = board.king_square(color);
+    let attacks = crate::attack::king_attacks(king_sq);
+    let quiet = attacks & !(us_bb | them_bb);
+    let captures = attacks & them_bb;
+    let mut q = quiet;
+    while q != 0 {
+        let to_idx = q.trailing_zeros() as u8;
+        q &= q - 1;
+        moves[*count] = Move::new(king_sq, Square::new(to_idx).unwrap());
+        *count += 1;
+    }
+    let mut c = captures;
+    while c != 0 {
+        let to_idx = c.trailing_zeros() as u8;
+        c &= c - 1;
+        moves[*count] = Move::capture(king_sq, Square::new(to_idx).unwrap());
+        *count += 1;
+    }
+
+    // castling
+    let rank = king_sq.rank();
+    if color == Color::White && rank == 0 {
+        if board.castling_rights().white_kingside
+            && board.empty_square(Square::F1)
+            && board.empty_square(Square::G1)
+        {
+            let e1_ok = !board.is_attacked_by(Square::E1, Color::Black);
+            let f1_ok = !board.is_attacked_by(Square::F1, Color::Black);
+            let g1_ok = !board.is_attacked_by(Square::G1, Color::Black);
+            if e1_ok && f1_ok && g1_ok {
+                moves[*count] = Move::castle(Square::E1, Square::G1);
+                *count += 1;
             }
         }
-
-        // castling
-        let rank = sq.rank();
-        if color == Color::White && rank == 0 {
-            if board.castling_rights().white_kingside
-                && board.empty_square(Square::F1)
-                && board.empty_square(Square::G1)
-            {
-                let e1_ok = !board.is_attacked_by(Square::E1, Color::Black);
-                let f1_ok = !board.is_attacked_by(Square::F1, Color::Black);
-                let g1_ok = !board.is_attacked_by(Square::G1, Color::Black);
-                if e1_ok && f1_ok && g1_ok {
-                    moves[*count] = Move::castle(Square::E1, Square::G1);
-                    *count += 1;
-                }
-            }
-            if board.castling_rights().white_queenside
-                && board.empty_square(Square::D1)
-                && board.empty_square(Square::C1)
-                && board.empty_square(Square::B1)
-                && !board.is_attacked_by(Square::E1, Color::Black)
-                && !board.is_attacked_by(Square::D1, Color::Black)
-                && !board.is_attacked_by(Square::C1, Color::Black)
-            {
-                moves[*count] = Move::castle(Square::E1, Square::C1);
-                *count += 1;
-            }
-        } else if color == Color::Black && rank == 7 {
-            if board.castling_rights().black_kingside
-                && board.empty_square(Square::F8)
-                && board.empty_square(Square::G8)
-                && !board.is_attacked_by(Square::E8, Color::White)
-                && !board.is_attacked_by(Square::F8, Color::White)
-                && !board.is_attacked_by(Square::G8, Color::White)
-            {
-                moves[*count] = Move::castle(Square::E8, Square::G8);
-                *count += 1;
-            }
-            if board.castling_rights().black_queenside
-                && board.empty_square(Square::D8)
-                && board.empty_square(Square::C8)
-                && board.empty_square(Square::B8)
-                && !board.is_attacked_by(Square::E8, Color::White)
-                && !board.is_attacked_by(Square::D8, Color::White)
-                && !board.is_attacked_by(Square::C8, Color::White)
-            {
-                moves[*count] = Move::castle(Square::E8, Square::C8);
-                *count += 1;
-            }
+        if board.castling_rights().white_queenside
+            && board.empty_square(Square::D1)
+            && board.empty_square(Square::C1)
+            && board.empty_square(Square::B1)
+            && !board.is_attacked_by(Square::E1, Color::Black)
+            && !board.is_attacked_by(Square::D1, Color::Black)
+            && !board.is_attacked_by(Square::C1, Color::Black)
+        {
+            moves[*count] = Move::castle(Square::E1, Square::C1);
+            *count += 1;
+        }
+    } else if color == Color::Black && rank == 7 {
+        if board.castling_rights().black_kingside
+            && board.empty_square(Square::F8)
+            && board.empty_square(Square::G8)
+            && !board.is_attacked_by(Square::E8, Color::White)
+            && !board.is_attacked_by(Square::F8, Color::White)
+            && !board.is_attacked_by(Square::G8, Color::White)
+        {
+            moves[*count] = Move::castle(Square::E8, Square::G8);
+            *count += 1;
+        }
+        if board.castling_rights().black_queenside
+            && board.empty_square(Square::D8)
+            && board.empty_square(Square::C8)
+            && board.empty_square(Square::B8)
+            && !board.is_attacked_by(Square::E8, Color::White)
+            && !board.is_attacked_by(Square::D8, Color::White)
+            && !board.is_attacked_by(Square::C8, Color::White)
+        {
+            moves[*count] = Move::castle(Square::E8, Square::C8);
+            *count += 1;
         }
     }
 }
@@ -327,21 +381,21 @@ mod tests_edge_cases {
         let board = Board::from_fen(fen).expect("valid");
         let e3 = Square::from_file_rank(4, 2).unwrap();
         let along_pin = [
-            Square::from_file_rank(4, 1).unwrap(), // e2
-            Square::from_file_rank(4, 3).unwrap(), // e4
-            Square::from_file_rank(4, 4).unwrap(), // e5
-            Square::from_file_rank(4, 5).unwrap(), // e6
-            Square::from_file_rank(4, 6).unwrap(), // e7
+            Square::from_file_rank(4, 1).unwrap(),
+            Square::from_file_rank(4, 3).unwrap(),
+            Square::from_file_rank(4, 4).unwrap(),
+            Square::from_file_rank(4, 5).unwrap(),
+            Square::from_file_rank(4, 6).unwrap(),
             Square::E8,
         ];
         let off_pin = [
-            Square::from_file_rank(3, 2).unwrap(), // d3
-            Square::from_file_rank(5, 2).unwrap(), // f3
-            Square::from_file_rank(6, 2).unwrap(), // g3
-            Square::from_file_rank(7, 2).unwrap(), // h3
-            Square::from_file_rank(2, 2).unwrap(), // c3
-            Square::from_file_rank(1, 2).unwrap(), // b3
-            Square::from_file_rank(0, 2).unwrap(), // a3
+            Square::from_file_rank(3, 2).unwrap(),
+            Square::from_file_rank(5, 2).unwrap(),
+            Square::from_file_rank(6, 2).unwrap(),
+            Square::from_file_rank(7, 2).unwrap(),
+            Square::from_file_rank(2, 2).unwrap(),
+            Square::from_file_rank(1, 2).unwrap(),
+            Square::from_file_rank(0, 2).unwrap(),
         ];
         let mut moves = [Move::NULL; MAX_MOVES];
         let count = generate_legal_moves(&board, &mut moves);
