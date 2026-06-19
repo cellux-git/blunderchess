@@ -173,6 +173,49 @@ impl Move {
 
     #[inline]
     pub(crate) fn from_raw(raw: u16) -> Move { Move(raw) }
+
+    #[inline]
+    pub fn packed(&self) -> u32 {
+        let mut packed: u32 = 0;
+        packed |= (self.from().index() as u32) & 0x3F;
+        packed |= ((self.to().index() as u32) & 0x3F) << 6;
+        packed |= ((self.kind() as u32) & 0x3) << 12;
+        let promo_bits: u32 = match self.promotion_piece() {
+            Some(Piece::Knight) => 1,
+            Some(Piece::Bishop) => 2,
+            Some(Piece::Rook) => 3,
+            _ => 0,
+        };
+        packed | (promo_bits << 15)
+    }
+
+    pub fn from_packed(packed: u32) -> Option<Move> {
+        if packed == 0 { return None; }
+        let from = Square::new((packed & 0x3F) as u8)?;
+        let to = Square::new(((packed >> 6) & 0x3F) as u8)?;
+        let kind_val = ((packed >> 12) & 0x3) as u8;
+        let promo_val = ((packed >> 15) & 0x3) as u8;
+
+        let piece = match promo_val {
+            0 => None,
+            1 => Some(Piece::Knight),
+            2 => Some(Piece::Bishop),
+            3 => Some(Piece::Rook),
+            4 => Some(Piece::Queen),
+            _ => return None,
+        };
+
+        let raw = (from.index() as u16)
+            | ((to.index() as u16) << 6)
+            | ((match piece {
+                Some(Piece::Knight) => 1u16,
+                Some(Piece::Bishop) => 2u16,
+                Some(Piece::Rook) => 3u16,
+                _ => 0u16,
+            }) << 12)
+            | ((kind_val as u16) << 14);
+        Some(Move::from_raw(raw))
+    }
 }
 
 impl fmt::Display for Move {

@@ -1,5 +1,6 @@
-use crate::board::{Board, MAX_MOVES};
-use crate::movegen;
+use crate::board::Board;
+use crate::eval::Eval;
+use crate::movegen::{self, MAX_MOVES};
 use crate::search::params::{SearchParams, SearchResult};
 use crate::search::worker::search_worker;
 use crate::thread_pool::ThreadPool;
@@ -16,10 +17,21 @@ pub fn search(
     tt: &Arc<TT>,
     pool: Option<&ThreadPool>,
 ) -> SearchResult {
+    search_with_eval(board, params, stop, tt, pool, &*crate::eval::EVAL)
+}
+
+pub(crate) fn search_with_eval(
+    board: &Board,
+    params: &SearchParams,
+    stop: &Arc<AtomicBool>,
+    tt: &Arc<TT>,
+    pool: Option<&ThreadPool>,
+    eval: &'static Eval,
+) -> SearchResult {
     if params.threads.max(1) == 1 {
-        return search_single(board, params, stop, tt, 0);
+        return search_single(board, params, stop, tt, 0, eval);
     }
-    search_mt(board, params, stop, tt, pool)
+    search_mt(board, params, stop, tt, pool, eval)
 }
 
 pub(crate) fn search_single(
@@ -28,9 +40,10 @@ pub(crate) fn search_single(
     stop: &Arc<AtomicBool>,
     tt: &Arc<TT>,
     thread_id: u8,
+    eval: &'static Eval,
 ) -> SearchResult {
     let mut b = board.clone();
-    let mut result = search_worker(&mut b, params, stop, tt, thread_id);
+    let mut result = search_worker(&mut b, params, stop, tt, thread_id, eval);
     result.total_nodes = result.nodes;
     result
 }
@@ -41,10 +54,11 @@ pub(crate) fn search_mt(
     stop: &Arc<AtomicBool>,
     tt: &Arc<TT>,
     pool: Option<&ThreadPool>,
+    eval: &'static Eval,
 ) -> SearchResult {
     let num_threads = params.threads.max(1) as usize;
     if num_threads == 1 {
-        return search_single(board, params, stop, tt, 0);
+        return search_single(board, params, stop, tt, 0, eval);
     }
 
     let start = Instant::now();
@@ -71,7 +85,7 @@ pub(crate) fn search_mt(
             let tn = Arc::clone(&total_nodes);
 
             jobs.push(Box::new(move || {
-                let result = search_worker(&mut b, &p, &real_stop, &tt, tid);
+                let result = search_worker(&mut b, &p, &real_stop, &tt, tid, eval);
                 tn.fetch_add(result.nodes, Ordering::Relaxed);
                 {
                     let mut best = best.lock().unwrap();
@@ -97,7 +111,7 @@ pub(crate) fn search_mt(
             let tn = Arc::clone(&total_nodes);
 
             let handle = std::thread::spawn(move || {
-                let result = search_worker(&mut b, &p, &real_stop, &tt, tid);
+                let result = search_worker(&mut b, &p, &real_stop, &tt, tid, eval);
                 tn.fetch_add(result.nodes, Ordering::Relaxed);
                 let mut best = best.lock().unwrap();
                 if result.depth > best.depth || (result.depth == best.depth && result.best_move.is_some()) {

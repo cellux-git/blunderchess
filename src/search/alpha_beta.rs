@@ -1,7 +1,7 @@
-use crate::board::{Board, MAX_MOVES};
+use crate::board::Board;
 use crate::draw;
-use crate::eval::EVAL;
-use crate::movegen;
+use crate::eval::Eval;
+use crate::movegen::{self, MAX_MOVES};
 use crate::search::params::{SearchAlgorithmParams, CHECKMATE};
 use crate::search::quiescence::quiescence;
 use crate::search::worker::SearchState;
@@ -20,14 +20,15 @@ pub(crate) fn alpha_beta(
     is_pv: bool,
     thread_id: u8,
     alg: &SearchAlgorithmParams,
+    eval: &Eval,
 ) -> i32 {
     state.nodes += 1;
 
-    if ply >= MAX_DEPTH - 1 { return EVAL.evaluate(board); }
+    if ply >= MAX_DEPTH - 1 { return eval.evaluate(board); }
     state.pv_length[ply as usize] = ply as usize;
 
     if state.should_stop() || depth == 0 {
-        return quiescence(board, alpha, beta, ply, 0, state, tt);
+                return quiescence(board, alpha, beta, ply, 0, state, tt, eval);
     }
 
     let hash = board.hash();
@@ -55,7 +56,7 @@ pub(crate) fn alpha_beta(
 
     // IIR: reduced-depth search to find a good move when TT misses
     if !is_pv && hash_move.is_none() && depth >= 4 {
-        alpha_beta(board, alpha, beta, depth - 2, ply, state, tt, false, thread_id, alg);
+        alpha_beta(board, alpha, beta, depth - 2, ply, state, tt, false, thread_id, alg, eval);
         hash_move = tt.probe(hash).and_then(|e| e.best_move);
     }
 
@@ -72,19 +73,19 @@ pub(crate) fn alpha_beta(
         let null_depth = if depth > r { depth - r } else { 0 };
         if null_depth > 0 {
             let undo_null = board.make_null_move();
-            let null_score = -alpha_beta(board, -beta, -beta + 1, null_depth, ply + 1, state, tt, false, thread_id, alg);
+            let null_score = -alpha_beta(board, -beta, -beta + 1, null_depth, ply + 1, state, tt, false, thread_id, alg, eval);
             board.unmake_null_move(&undo_null);
             if null_score >= beta { return null_score; }
         }
     }
 
-    let static_eval = if depth <= alg.futility.max_depth { Some(EVAL.evaluate(board)) } else { None };
+    let static_eval = if depth <= alg.futility.max_depth { Some(eval.evaluate(board)) } else { None };
 
     // Razor pruning: at depth 1, if eval is far below alpha, skip to QS
     if depth == 1 && !is_pv && !in_check {
         if let Some(se) = static_eval {
             if se + alg.razor_margin <= alpha {
-                return quiescence(board, alpha, beta, ply, 0, state, tt);
+        return quiescence(board, alpha, beta, ply, 0, state, tt, eval);
             }
         }
     }
@@ -93,7 +94,7 @@ pub(crate) fn alpha_beta(
     let mut move_count: usize = 0;
     movegen::generate_pseudo_legal(board, &mut moves_buf, &mut move_count);
     let moves = &mut moves_buf[..move_count];
-    state.move_ordering.order_moves(moves, board, hash_move, ply, thread_id);
+    state.move_ordering.order_moves(moves, board, hash_move, ply, thread_id, eval);
 
     let side = board.side_to_move();
     let pinned = board.pinned_pieces(side);
@@ -154,7 +155,7 @@ pub(crate) fn alpha_beta(
 
         let mut score: i32;
         if moves_searched == 0 {
-            score = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, state, tt, is_pv, thread_id, alg);
+            score = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, state, tt, is_pv, thread_id, alg, eval);
         } else {
             score = alpha + 1;
             let mv_kind = mv.kind();
@@ -168,14 +169,14 @@ pub(crate) fn alpha_beta(
                     let r = if hist > 2000 { base_r.saturating_sub(1) } else if hist < 200 { base_r + 1 } else { base_r };
                     if depth > r + 1 {
                         let r_depth = depth - 1 - r;
-                        score = -alpha_beta(board, -alpha - 1, -alpha, r_depth, ply + 1, state, tt, false, thread_id, alg);
+                        score = -alpha_beta(board, -alpha - 1, -alpha, r_depth, ply + 1, state, tt, false, thread_id, alg, eval);
                     }
                 }
             }
             if score > alpha {
-                score = -alpha_beta(board, -alpha - 1, -alpha, depth - 1, ply + 1, state, tt, false, thread_id, alg);
+                score = -alpha_beta(board, -alpha - 1, -alpha, depth - 1, ply + 1, state, tt, false, thread_id, alg, eval);
                 if score > alpha && score < beta {
-                    score = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, state, tt, true, thread_id, alg);
+                    score = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, state, tt, true, thread_id, alg, eval);
                 }
             }
         }

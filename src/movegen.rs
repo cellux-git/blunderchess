@@ -1,6 +1,8 @@
 use crate::attack::{bishop_attacks, rook_attacks};
-use crate::board::{Board, MAX_MOVES};
+use crate::board::Board;
 use crate::types::{Color, Move, Piece, Square};
+
+pub const MAX_MOVES: usize = 218;
 
 pub fn generate_legal_moves(board: &Board, moves: &mut [Move; MAX_MOVES]) -> usize {
     let side = board.side_to_move();

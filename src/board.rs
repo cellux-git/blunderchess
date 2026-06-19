@@ -1,11 +1,9 @@
 use crate::types::{Bitboard, CastlingRights, Color, Move, MoveKind, Piece, Square, CASTLE_LOSE_MASK};
 use crate::zobrist;
+use crate::movegen::MAX_MOVES;
 use std::fmt;
 
 pub const INITIAL_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
-// ---- move buffer ----
-pub const MAX_MOVES: usize = 218;
 
 // ---- undo info for make/unmake ----
 pub struct UndoInfo {

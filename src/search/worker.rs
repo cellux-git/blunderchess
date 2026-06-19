@@ -1,6 +1,7 @@
 use crate::move_ordering::MoveOrdering;
-use crate::board::{Board, MAX_MOVES};
-use crate::movegen;
+use crate::board::Board;
+use crate::eval::Eval;
+use crate::movegen::{self, MAX_MOVES};
 use crate::tt::TT;
 use crate::types::{Move, MAX_DEPTH};
 use crate::search::params::{SearchParams, SearchResult, SearchAlgorithmParams, CHECKMATE};
@@ -47,6 +48,7 @@ pub(crate) fn search_worker(
     stop: &Arc<AtomicBool>,
     tt: &Arc<TT>,
     thread_id: u8,
+    eval: &Eval,
 ) -> SearchResult {
     let max_depth = params.depth.unwrap_or(MAX_DEPTH);
     let start = Instant::now();
@@ -91,7 +93,7 @@ pub(crate) fn search_worker(
             }
 
             let score = loop {
-                let score = alpha_beta(board, alpha, beta, depth, 0, &mut state, tt, true, thread_id, &alg);
+                let score = alpha_beta(board, alpha, beta, depth, 0, &mut state, tt, true, thread_id, &alg, eval);
 
                 if state.should_stop() { break score; }
 

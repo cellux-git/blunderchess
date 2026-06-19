@@ -1,16 +1,16 @@
-use crate::board::{Board, MAX_MOVES};
+use crate::board::Board;
 use crate::draw;
-use crate::eval::EVAL;
-use crate::movegen;
+use crate::eval::Eval;
+use crate::movegen::{self, MAX_MOVES};
 use crate::search::params::CHECKMATE;
 use crate::search::worker::SearchState;
 use crate::tt::{NodeType, TT};
 use crate::types::{Move, MoveKind, Piece, MAX_DEPTH};
 use std::sync::Arc;
 
-pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState, tt: &Arc<TT>) -> i32 {
+pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, qs_depth: u8, state: &mut SearchState, tt: &Arc<TT>, eval: &Eval) -> i32 {
     state.nodes += 1;
-    if state.should_stop() || ply >= MAX_DEPTH - 1 { return EVAL.evaluate(board); }
+    if state.should_stop() || ply >= MAX_DEPTH - 1 { return eval.evaluate(board); }
 
     let hash = board.hash();
     let tt_entry = tt.probe(hash);
@@ -32,7 +32,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
     if draw::is_terminal_draw(board) { return 0; }
 
-    let stand_pat = EVAL.evaluate(board);
+    let stand_pat = eval.evaluate(board);
     let in_check = board.in_check();
     if !in_check {
         if stand_pat >= beta {
@@ -65,7 +65,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
         // SEE pruning: skip losing captures in quiescence
         if qs_depth > 0 && !in_check && k == MoveKind::Capture {
-            if EVAL.see(board, mv) < 0 { continue; }
+            if eval.see(board, mv) < 0 { continue; }
         }
 
         let from = mv.from();
@@ -98,7 +98,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
         tt.store(hash, score, 0, NodeType::Exact, None);
         return score;
     }
-    state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board);
+    state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board, eval);
 
     let mut best_score = -(CHECKMATE + 200);
     let mut node_type = NodeType::UpperBound;
@@ -112,7 +112,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
             board.unmake_move(&undo);
             continue;
         }
-        let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state, tt);
+        let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state, tt, eval);
         board.unmake_move(&undo);
         if score > best_score { best_score = score; }
         if score >= beta {
