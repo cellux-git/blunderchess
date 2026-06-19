@@ -3,10 +3,10 @@ use crate::eval::params::{PieceEval, PawnEval};
 use crate::types::{Color, Piece, Square};
 use crate::attack::file_mask;
 
-pub(crate) fn eval_rooks(board: &Board, piece: &PieceEval, pawns_bb: u64, enemy_pawns_bb: u64, color: Color) -> (i32, i32) {
+pub(crate) fn eval_rooks(_board: &Board, piece: &PieceEval, pawns_bb: u64, enemy_pawns_bb: u64, color: Color, our_rooks: u64) -> (i32, i32) {
     let mut mg = 0i32;
     let mut eg = 0i32;
-    let mut rooks = board.pieces_bb(Piece::Rook) & board.colors_bb(color);
+    let mut rooks = our_rooks;
     while rooks != 0 {
         let sq_idx = rooks.trailing_zeros() as u8;
         let file = sq_idx & 7;
@@ -36,8 +36,8 @@ pub(crate) fn eval_rooks(board: &Board, piece: &PieceEval, pawns_bb: u64, enemy_
     (mg, eg)
 }
 
-pub(crate) fn eval_bad_bishops(board: &Board, piece: &PieceEval, color: Color, pawns_bb: u64) -> (i32, i32) {
-    let my_bishops = board.pieces_bb(Piece::Bishop) & board.colors_bb(color);
+pub(crate) fn eval_bad_bishops(board: &Board, piece: &PieceEval, color: Color, pawns_bb: u64, our_bishops: u64) -> (i32, i32) {
+    let my_bishops = our_bishops;
     if my_bishops == 0 { return (0, 0); }
 
     let mut mg = 0i32;
@@ -124,8 +124,8 @@ pub(crate) fn eval_bad_bishops(board: &Board, piece: &PieceEval, color: Color, p
     (mg, eg)
 }
 
-pub(crate) fn eval_knights(board: &Board, piece: &PieceEval, color: Color, enemy_pawns_bb: u64) -> (i32, i32) {
-    let my_knights = board.pieces_bb(Piece::Knight) & board.colors_bb(color);
+pub(crate) fn eval_knights(board: &Board, piece: &PieceEval, color: Color, enemy_pawns_bb: u64, our_knights: u64) -> (i32, i32) {
+    let my_knights = our_knights;
     let my_pawns = board.pieces_bb(Piece::Pawn) & board.colors_bb(color);
     let us_bb = board.colors_bb(color);
     let mut mg = 0i32;
@@ -164,10 +164,10 @@ pub(crate) fn eval_knights(board: &Board, piece: &PieceEval, color: Color, enemy
     (mg, eg)
 }
 
-pub(crate) fn eval_rook_queen_battery(board: &Board, piece: &PieceEval, color: Color) -> (i32, i32) {
+pub(crate) fn eval_rook_queen_battery(board: &Board, piece: &PieceEval, color: Color, our_rooks: u64, our_queens: u64) -> (i32, i32) {
     let us_bb = board.colors_bb(color);
-    let queens = board.pieces_bb(Piece::Queen) & us_bb;
-    let rooks = board.pieces_bb(Piece::Rook) & us_bb;
+    let queens = our_queens;
+    let rooks = our_rooks;
 
     let mut mg = 0i32;
     let mut eg = 0i32;
@@ -213,10 +213,9 @@ pub(crate) fn eval_rook_queen_battery(board: &Board, piece: &PieceEval, color: C
     (mg, eg)
 }
 
-pub(crate) fn eval_queen_multiattack(board: &Board, piece: &PieceEval, color: Color, enemy: Color) -> (i32, i32) {
-    let us_bb = board.colors_bb(color);
+pub(crate) fn eval_queen_multiattack(board: &Board, piece: &PieceEval, _color: Color, enemy: Color, our_queens: u64) -> (i32, i32) {
     let enemy_bb = board.colors_bb(enemy);
-    let queens = board.pieces_bb(Piece::Queen) & us_bb;
+    let queens = our_queens;
     let occ = board.occupancy();
     let mut mg = 0i32;
     let mut eg = 0i32;

@@ -35,7 +35,15 @@ impl super::Eval {
             base_gain += self.material_value(pp) - self.material_value(Piece::Pawn);
         }
 
-        let occ = board.occupancy() ^ from.bit() ^ to.bit();
+        let is_ep = victim.is_none() && board.en_passant() == Some(to)
+            && moving == Some(Piece::Pawn);
+        let mut occ = board.occupancy() ^ from.bit() ^ to.bit();
+        if is_ep {
+            base_gain += self.material_value(Piece::Pawn);
+            let cap_sq = Square::from_file_rank(to.file(), from.rank()).unwrap();
+            occ ^= cap_sq.bit();
+        }
+
         let opp_gain = self.see_rec(board, to, board.side_to_move().flip(), occ, moving);
         base_gain - opp_gain
     }

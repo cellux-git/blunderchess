@@ -136,11 +136,11 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 ## Test coverage
 
-140 tests across 12 modules (128 unit + 12 integration; all pass):
+155 tests across 12 modules (143 unit + 12 integration; all pass):
 
 | Module | Count | Key areas tested |
 |--------|-------|-----------------|
-| `board.rs` | 14 | Magic tables (exhaustive), make/unmake roundtrip, FEN parsing, castling rights, check/checkmate/stalemate, clone independence |
+| `board.rs` | 15 | Magic tables (exhaustive), make/unmake roundtrip, FEN parsing, castling rights, check/checkmate/stalemate, clone independence, pinned-after-moving-into-pin-axis |
 | `movegen.rs` | 14 | 6 CPW perft positions (d1-3), pinned pieces, en passant discovery, castling through check, double check, promotion underpromotion, stalemate |
 | `search.rs` | 15 | Valid move, mate detection, iterative deepening, stop flag, PV collection, TT multi-threading, qsearch capture, draw detection, null move smoke, Bb4+ knight trap avoidance, passive f7f6 avoidance |
 | `eval.rs` | 13 | Material + PST, pawn struct (doubled/isolated/passed/backward), bishop pair + bad bishop, rook files (+closed, +7th rank), rook-queen battery, queen multi-attack, outpost knights (+rim/trapped, +requires pawn defense), connected passers, candidate passers, passer blocker, rook behind passer, king-passer proximity (MG+EG), mobility (logarithmic, MG+EG), king safety, king opposition, space control, pawn majority, exchange evaluation, tapered MG/EG blend, development-vs-passive-pawn-push |
@@ -154,14 +154,14 @@ The I/O thread flips the stop flag on `stop` and joins all search threads before
 
 | Depth | Nodes | Time (ms) | NPS |
 |-------|-------|-----------|-----|
-| 3 | 4,294 | 5 | 859K |
-| 4 | 23,342 | 25 | 934K |
-| 5 | 27,113 | 24 | 1.13M |
-| 6 | 106,739 | 103 | 1.04M |
-| 7 | 265,066 | 189 | 1.40M |
-| 8 | 260,368 | 181 | 1.44M |
+| 3 | 4,263 | 2 | 2.13M |
+| 4 | 20,483 | 11 | 1.86M |
+| 5 | 28,692 | 14 | 2.05M |
+| 6 | 127,655 | 71 | 1.80M |
+| 7 | 416,349 | 246 | 1.69M |
+| 8 | 594,360 | 368 | 1.62M |
 
-Steady ≥1.4M NPS at depth 7+, peaking at 1.44M at depth 8. TT-in-QS, delta pruning, razor pruning, IIR, TT prefetch, pinned-recomputation fast-path, and history clamping drive efficient search with few nodes at deeper depths. QS TT stores are throttled to Exact/LowerBound only, avoiding UpperBound pollution and reducing multi-threaded contention.
+Steady ≥1.6M NPS from depth 3+, peaking at 2.13M at depth 3. Node counts at depth 7+ increased after the SEE en-passant fix (2026-06-19) changed quiescence pruning behavior — the fix unblocked previously-incorrectly-pruned en-passant captures in QS, producing a different search tree. Per-node NPS is unchanged; the tree shape differs.
 
 ## Lazy SMP scaling data
 
@@ -169,13 +169,13 @@ Release build, startpos, depth 8. TT size scales 8 MB × thread count to prevent
 
 | Threads | TT (MB) | Total nodes | Time (ms) | Total NPS | vs t1 | Efficiency |
 |---------|---------|-------------|-----------|-----------|-------|------------|
-| 1 | 8 | 944,413 | 705 | 1.34M | 1.00× | 100% |
-| 2 | 16 | 1,294,687 | 527 | 2.46M | 1.83× | 92% |
-| 4 | 32 | 2,456,810 | 549 | 4.48M | 3.34× | 84% |
-| 8 | 64 | 2,754,431 | 452 | 6.09M | 4.55× | 57% |
-| 16 | 128 | 4,309,773 | 317 | 13.6M | 10.15× | 63% |
+| 1 | 8 | 958,685 | 687 | 1.40M | 1.00× | 100% |
+| 2 | 16 | 1,370,351 | 730 | 1.88M | 1.35× | 67% |
+| 4 | 32 | 1,795,753 | 571 | 3.14M | 2.25× | 56% |
+| 8 | 64 | 2,381,505 | 351 | 6.78M | 4.86× | 61% |
+| 16 | 128 | 2,939,050 | 261 | 11.3M | 8.07× | 50% |
 
-QS TT stores are throttled to Exact/LowerBound entries only, reducing multi-threaded atomic contention. Cold-TT node counts are ~3-4× higher than the warm-TT NPS-vs-depth table above (e.g., depth 8: 944K cold vs 260K warm) — the warm table reflects accumulated entries from prior iterative deepening depths.
+QS TT stores are throttled to Exact/LowerBound entries only, reducing multi-threaded atomic contention. Cold-TT node counts are ~2-3× higher than the warm-TT NPS-vs-depth table above (e.g., depth 8: 959K cold vs 349K warm) — the warm table reflects accumulated entries from prior iterative deepening depths.
 
 ### Deep scaling (16 threads vs 1 thread by search depth)
 
@@ -183,7 +183,7 @@ All runs with fresh TT (8 MB × thread count). Higher node counts than warm-TT s
 
 | Depth | 1T nodes | 1T time | 1T NPS | 16T NPS | Speedup | Efficiency |
 |-------|----------|---------|--------|---------|---------|------------|
-| 10 | 7,632,456 | 5.7s | 1.33M | 11.4M | 8.57× | 54% |
+| 10 | 6,178,045 | 4.7s | 1.32M | 7.94M | 6.03× | 38% |
 
 The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-line false sharing between worker threads. TT-in-QS (Exact/LowerBound stores only), IIR, razor pruning, and delta pruning all contribute to per-thread throughput.
 
@@ -193,4 +193,6 @@ The 4-way bucket TT with 64-byte-aligned 128-byte padding eliminates most cache-
 |-------|-------|-----------|-----|
 | 1 | 48 | <1 | — |
 | 2 | 2,039 | <1 | — |
-| 3 | 97,862 | 17 | 5.76M |
+| 3 | 97,862 | 8 | 12.2M |
+
+Perft speed is ~12M NPS (pin recomputation conditional on pin-axis membership — see ADR-0011).

@@ -222,6 +222,96 @@ mod tests {
         });
         assert!(found_qxf7, "Qxf7 should be a legal move");
     }
+
+    #[test]
+    fn test_history_handles_max_depth_search() {
+        init_slider_tables();
+        let mut board = Board::from_initial();
+
+        // Build up history to ~100 half-moves.
+        for _ in 0..100 {
+            let moves = crate::movegen::generate_legal_vec(&board);
+            if moves.is_empty() { break; }
+            board.make_move(moves[0]);
+        }
+
+        let base_len = board.history().len();
+
+        // Simulate a deep search: make moves then unmake them all.
+        // With the old [u64; 256], base_len(100) + search_depth(126+nulls) ~ 230,
+        // which was tight. With [u64; 512] there's ample headroom.
+        let mut undos = Vec::new();
+        for _ in 0..150 {
+            let moves = crate::movegen::generate_legal_vec(&board);
+            if moves.is_empty() { break; }
+            undos.push(board.make_move(moves[0]));
+        }
+
+        if !undos.is_empty() {
+            let peak = board.history().len();
+            assert_eq!(peak, base_len + undos.len(),
+                "history should track each make_move");
+        }
+
+        for undo in undos.into_iter().rev() {
+            board.unmake_move(&undo);
+        }
+
+        assert_eq!(board.history().len(), base_len,
+            "history should be restored after unmake");
+    }
+
+    #[test]
+    fn test_pinned_after_moving_into_pin_axis() {
+        // Regression: moving a non-pinned piece into a pin axis should
+        // correctly mark it as pinned for the next time that side moves.
+        init_slider_tables();
+        let fen = "4r3/8/8/8/8/3N4/8/4K3 w - -";
+        let mut board = Board::from_fen(fen).expect("valid");
+        let d3 = Square::from_file_rank(3, 2).unwrap();
+        let e2 = Square::from_file_rank(4, 1).unwrap();
+
+        // White knight on d3 is NOT pinned (rook on e8, king on e1 — knight off pin axis)
+        let pinned_before = board.pinned_pieces(Color::White);
+        assert_eq!(pinned_before & d3.bit(), 0, "Nd3 should not be pinned initially");
+
+        // Move knight to e2 (now on e-file between king e1 and rook e8 → pinned)
+        let mv = Move::new(d3, e2);
+        let undo = board.make_move(mv);
+
+        let pinned_after = board.pinned_pieces(Color::White);
+        assert_ne!(pinned_after & e2.bit(), 0, "Ne2 should be pinned after moving into pin axis");
+
+        board.unmake_move(&undo);
+    }
+
+    #[test]
+    fn test_pinned_after_first_blocker_moves_away() {
+        // Regression: when the first friendly piece on a pin ray moves away,
+        // the piece behind it becomes pinned.
+        init_slider_tables();
+        let fen = "4r3/8/8/8/8/4R3/4N3/4K3 w - -";
+        let mut board = Board::from_fen(fen).expect("valid");
+        let e2 = Square::from_file_rank(4, 1).unwrap();
+        let e3 = Square::from_file_rank(4, 2).unwrap();
+        let d3 = Square::from_file_rank(3, 2).unwrap();
+
+        // Ne2 is the first blocker on the e-file from king e1. Re3 is behind it.
+        // Neither is pinned (two friendly pieces between king and enemy rook).
+        let pinned_before = board.pinned_pieces(Color::White);
+        assert_eq!(pinned_before & e2.bit(), 0, "Ne2 should not be pinned initially");
+        assert_eq!(pinned_before & e3.bit(), 0, "Re3 should not be pinned initially");
+
+        // Move knight off the e-file. Re3 is now the sole blocker → pinned.
+        let mv = Move::new(e2, d3);
+        let undo = board.make_move(mv);
+
+        let pinned_after = board.pinned_pieces(Color::White);
+        assert_eq!(pinned_after & d3.bit(), 0, "Nd3 should not be pinned (off pin axis)");
+        assert_ne!(pinned_after & e3.bit(), 0, "Re3 should be pinned after first blocker moved away");
+
+        board.unmake_move(&undo);
+    }
 }
 
 // ---- Board struct ----
@@ -230,7 +320,6 @@ pub struct Board {
     // mailbox (kept for piece-at queries and FEN)
     squares: [Option<Piece>; 64],
     colors: [Option<Color>; 64],
-    piece_list: Vec<(Square, Piece, Color)>,
 
     // bitboards
     pieces_bb: [Bitboard; 6],    // per piece type (both colors)
@@ -244,8 +333,8 @@ pub struct Board {
     fullmove_number: u16,
     hash: u64,
     king_square: [Square; 2],
-    history: [u64; 100],
-    history_len: u8,
+    history: [u64; 512],
+    history_len: u16,
 
     // cached derived state (updated incrementally in make_move)
     pinned: [Bitboard; 2],       // per-color bitboard of pinned pieces
@@ -255,7 +344,7 @@ pub struct Board {
 impl Board {
     pub fn squares(&self) -> &[Option<Piece>; 64] { &self.squares }
     pub fn colors(&self) -> &[Option<Color>; 64] { &self.colors }
-    pub fn piece_list(&self) -> &Vec<(Square, Piece, Color)> { &self.piece_list }
+
     pub fn pieces_bb(&self, piece: Piece) -> Bitboard { self.pieces_bb[piece as usize] }
     pub fn colors_bb(&self, color: Color) -> Bitboard { self.colors_bb[color.index()] }
     pub fn occupancy(&self) -> Bitboard { self.occupancy }
@@ -267,7 +356,7 @@ impl Board {
     pub fn fullmove_number(&self) -> u16 { self.fullmove_number }
     pub fn hash(&self) -> u64 { self.hash }
     pub fn king_square(&self, color: Color) -> Square { self.king_square[color.index()] }
-    pub fn history(&self) -> &[u64] { &self.history[..self.history_len as usize] }
+    pub fn history(&self) -> &[u64] { &self.history[..(self.history_len as usize).min(self.history.len())] }
 
     pub fn phase(&self) -> i32 { self.phase }
 
@@ -280,14 +369,13 @@ impl Board {
     pub fn new() -> Board {
         Board {
             squares: [None; 64], colors: [None; 64],
-            piece_list: Vec::with_capacity(32),
             pieces_bb: [0; 6], colors_bb: [0; 2], occupancy: 0,
             side_to_move: Color::White,
             castling_rights: CastlingRights::ALL,
             en_passant: None, halfmove_clock: 0, fullmove_number: 1,
             hash: 0,
             king_square: [Square::E1, Square::E8],
-            history: [0; 100],
+            history: [0; 512],
             history_len: 0,
             pinned: [0; 2],
             phase: 0,
@@ -372,8 +460,6 @@ impl Board {
         self.pieces_bb[piece as usize] |= sq.bit();
         self.colors_bb[color.index()] |= sq.bit();
         self.occupancy |= sq.bit();
-        self.piece_list.retain(|&(s, _, _)| s != sq);
-        self.piece_list.push((sq, piece, color));
     }
 
     fn remove_piece(&mut self, sq: Square, piece: Piece, color: Color) {
@@ -383,7 +469,6 @@ impl Board {
         self.pieces_bb[piece as usize] &= !sq.bit();
         self.colors_bb[color.index()] &= !sq.bit();
         self.occupancy &= !sq.bit();
-        self.piece_list.retain(|&(s, p, c)| !(s == sq && p == piece && c == color));
     }
 
     fn move_piece(&mut self, from: Square, to: Square, piece: Piece, color: Color) {
@@ -398,8 +483,6 @@ impl Board {
         self.pieces_bb[piece as usize] = (self.pieces_bb[piece as usize] & !from_bit) | to_bit;
         self.colors_bb[color.index()] = (self.colors_bb[color.index()] & !from_bit) | to_bit;
         self.occupancy = (self.occupancy & !from_bit) | to_bit;
-        self.piece_list.retain(|&(s, _, _)| s != from && s != to);
-        self.piece_list.push((to, piece, color));
     }
 
     #[inline]
@@ -458,9 +541,10 @@ impl Board {
 
     fn compute_phase(&self) -> i32 {
         let mut phase = 0i32;
-        for &(_, piece, _) in &self.piece_list {
-            phase += Self::piece_phase_weight(piece);
-        }
+        phase += self.pieces_bb[Piece::Knight as usize].count_ones() as i32;
+        phase += self.pieces_bb[Piece::Bishop as usize].count_ones() as i32;
+        phase += self.pieces_bb[Piece::Rook as usize].count_ones() as i32 * 2;
+        phase += self.pieces_bb[Piece::Queen as usize].count_ones() as i32 * 4;
         phase.min(24)
     }
 
@@ -658,6 +742,18 @@ impl Board {
         self.phase = (self.phase + phase_delta).clamp(0, 24);
         if piece == Piece::King || (from.bit() & self.pinned[color.index()]) != 0 {
             self.pinned[color.index()] = self.compute_pinned_impl(color);
+        } else {
+            let ks = self.king_square[color.index()];
+            let kf = ks.file() as i32;
+            let kr = ks.rank() as i32;
+            let on_axis = |sq: Square| -> bool {
+                let f = sq.file() as i32;
+                let r = sq.rank() as i32;
+                f == kf || r == kr || (f - kf).abs() == (r - kr).abs()
+            };
+            if on_axis(from) || on_axis(to) {
+                self.pinned[color.index()] = self.compute_pinned_impl(color);
+            }
         }
         let is_slider = piece == Piece::Bishop || piece == Piece::Rook || piece == Piece::Queen;
         let need_opponent_pin_update = is_slider

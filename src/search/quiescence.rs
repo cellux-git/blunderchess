@@ -22,10 +22,11 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
     if let Some(ref entry) = tt_entry {
         {
+            let s = tt_score.unwrap();
             match entry.node_type {
-                NodeType::Exact => return tt_score.unwrap(),
-                NodeType::LowerBound => { if tt_score.unwrap() >= beta { return tt_score.unwrap(); } }
-                NodeType::UpperBound => { if tt_score.unwrap() <= alpha { return tt_score.unwrap(); } }
+                NodeType::Exact => return s,
+                NodeType::LowerBound => { if s >= beta { return s; } }
+                NodeType::UpperBound => { if s <= alpha { return s; } }
             }
         }
     }
@@ -84,7 +85,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
             let undo = board.make_move(mv);
             let king = board.king_square(side);
             let own_king_safe = !board.is_attacked_by(king, board.side_to_move());
-            let gives_check = board.in_check();
+            let gives_check = if !is_cap_or_promo || in_check { board.in_check() } else { false };
             board.unmake_move(&undo);
             if own_king_safe && (is_cap_or_promo || gives_check || in_check) {
                 moves_buf[filtered] = mv;
@@ -107,11 +108,6 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
         let mv = moves_buf[i];
         let undo = board.make_move(mv);
         tt.prefetch(board.hash());
-        let king_sq = board.king_square(side);
-        if board.is_attacked_by(king_sq, board.side_to_move()) {
-            board.unmake_move(&undo);
-            continue;
-        }
         let score = -quiescence(board, -beta, -alpha, ply + 1, qs_depth + 1, state, tt, eval);
         board.unmake_move(&undo);
         if score > best_score { best_score = score; }

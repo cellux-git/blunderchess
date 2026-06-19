@@ -78,19 +78,34 @@ pub(crate) fn search_mt(
         for tid in 0..num_threads as u8 {
             let mut b = board.clone();
             let p = params.clone();
-            let real_stop = if tid == 0 { Arc::clone(&stop) } else { Arc::new(AtomicBool::new(false)) };
+            let real_stop = Arc::clone(&stop);
             let tt = tt.clone();
             let best = Arc::clone(&best_result);
             let bar = Arc::clone(&barrier);
             let tn = Arc::clone(&total_nodes);
 
             jobs.push(Box::new(move || {
-                let result = search_worker(&mut b, &p, &real_stop, &tt, tid, eval);
-                tn.fetch_add(result.nodes, Ordering::Relaxed);
-                {
-                    let mut best = best.lock().unwrap();
-                    if result.depth > best.depth || (result.depth == best.depth && result.best_move.is_some()) {
-                        *best = result;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    search_worker(&mut b, &p, &real_stop, &tt, tid, eval)
+                }));
+                match result {
+                    Ok(search_result) => {
+                        tn.fetch_add(search_result.nodes, Ordering::Relaxed);
+                        let mut best = best.lock().unwrap();
+                        if search_result.depth > best.depth || (search_result.depth == best.depth && search_result.best_move.is_some()) {
+                            *best = search_result;
+                        }
+                    }
+                    Err(panic_err) => {
+                        let msg = if let Some(s) = panic_err.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = panic_err.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        log::error!("Search worker {} panicked: {msg}", tid);
+                        // Still signal the barrier to avoid deadlock
                     }
                 }
                 bar.wait();
@@ -105,7 +120,7 @@ pub(crate) fn search_mt(
         for tid in 0..num_threads as u8 {
             let mut b = board.clone();
             let p = params.clone();
-            let real_stop = if tid == 0 { Arc::clone(&stop) } else { Arc::new(AtomicBool::new(false)) };
+            let real_stop = Arc::clone(&stop);
             let tt = tt.clone();
             let best = Arc::clone(&best_result);
             let tn = Arc::clone(&total_nodes);

@@ -1,6 +1,6 @@
 use crate::attack::{bishop_attacks, rook_attacks};
 use crate::board::Board;
-use crate::types::{Color, Move, Piece, Square};
+use crate::types::{Color, Move, Piece, Square, SQUARES};
 
 pub const MAX_MOVES: usize = 218;
 
@@ -65,7 +65,7 @@ fn generate_pawn_moves(
     let mut bb = pawns;
     while bb != 0 {
         let sq_idx = bb.trailing_zeros() as i32;
-        let sq = Square::new(sq_idx as u8).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         bb &= bb - 1;
 
         let rank = sq_idx >> 3;
@@ -73,7 +73,7 @@ fn generate_pawn_moves(
         // single push
         let fwd_idx = sq_idx + dir;
         if fwd_idx >= 0 && fwd_idx < 64 && ((1u64 << fwd_idx) & occ) == 0 {
-            let fwd = Square::new(fwd_idx as u8).unwrap();
+            let fwd = SQUARES[fwd_idx as usize];
             if rank == (promo_rank_shift >> 3) {
                 for &p in &promo_pieces {
                     moves[*count] = Move::promotion(sq, fwd, p);
@@ -86,7 +86,7 @@ fn generate_pawn_moves(
                 if rank == (start_rank_shift >> 3) {
                     let dbl_idx = sq_idx + dir * 2;
                     if dbl_idx >= 0 && dbl_idx < 64 && ((1u64 << dbl_idx) & occ) == 0 {
-                        moves[*count] = Move::new(sq, Square::new(dbl_idx as u8).unwrap());
+                        moves[*count] = Move::new(sq, SQUARES[dbl_idx as usize]);
                         *count += 1;
                     }
                 }
@@ -100,7 +100,7 @@ fn generate_pawn_moves(
         while caps != 0 {
             let cap_idx = caps.trailing_zeros() as u8;
             caps &= caps - 1;
-            let to = Square::new(cap_idx).unwrap();
+            let to = SQUARES[cap_idx as usize];
             if rank == (promo_rank_shift >> 3) {
                 for &p in &promo_pieces {
                     moves[*count] = Move::promotion(sq, to, p);
@@ -131,7 +131,7 @@ fn generate_knight_moves(
     let mut bb = knights;
     while bb != 0 {
         let sq_idx = bb.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         bb &= bb - 1;
         let attacks = crate::attack::knight_attacks(sq);
         let quiet = attacks & !(us_bb | them_bb);
@@ -140,14 +140,14 @@ fn generate_knight_moves(
         while q != 0 {
             let to_idx = q.trailing_zeros() as u8;
             q &= q - 1;
-            moves[*count] = Move::new(sq, Square::new(to_idx).unwrap());
+            moves[*count] = Move::new(sq, SQUARES[to_idx as usize]);
             *count += 1;
         }
         let mut c = captures;
         while c != 0 {
             let to_idx = c.trailing_zeros() as u8;
             c &= c - 1;
-            moves[*count] = Move::capture(sq, Square::new(to_idx).unwrap());
+            moves[*count] = Move::capture(sq, SQUARES[to_idx as usize]);
             *count += 1;
         }
     }
@@ -166,7 +166,7 @@ fn generate_sliding_moves(
     let mut diag = bishops | queens;
     while diag != 0 {
         let sq_idx = diag.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         diag &= diag - 1;
         let attacks = bishop_attacks(sq_idx, occ) & !us_bb;
         push_slider_moves(sq, attacks, them_bb, moves, count);
@@ -176,7 +176,7 @@ fn generate_sliding_moves(
     let mut ortho = rooks | queens;
     while ortho != 0 {
         let sq_idx = ortho.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         ortho &= ortho - 1;
         let attacks = rook_attacks(sq_idx, occ) & !us_bb;
         push_slider_moves(sq, attacks, them_bb, moves, count);
@@ -191,14 +191,14 @@ fn push_slider_moves(from: Square, attacks: u64, them_bb: u64, moves: &mut [Move
     while bb != 0 {
         let lsb = bb.trailing_zeros() as u8;
         bb &= bb - 1;
-        moves[*count] = Move::capture(from, Square::new(lsb).unwrap());
+        moves[*count] = Move::capture(from, SQUARES[lsb as usize]);
         *count += 1;
     }
     let mut bb = quiets;
     while bb != 0 {
         let lsb = bb.trailing_zeros() as u8;
         bb &= bb - 1;
-        moves[*count] = Move::new(from, Square::new(lsb).unwrap());
+        moves[*count] = Move::new(from, SQUARES[lsb as usize]);
         *count += 1;
     }
 }
@@ -217,14 +217,14 @@ fn generate_king_moves(
     while q != 0 {
         let to_idx = q.trailing_zeros() as u8;
         q &= q - 1;
-        moves[*count] = Move::new(king_sq, Square::new(to_idx).unwrap());
+        moves[*count] = Move::new(king_sq, SQUARES[to_idx as usize]);
         *count += 1;
     }
     let mut c = captures;
     while c != 0 {
         let to_idx = c.trailing_zeros() as u8;
         c &= c - 1;
-        moves[*count] = Move::capture(king_sq, Square::new(to_idx).unwrap());
+        moves[*count] = Move::capture(king_sq, SQUARES[to_idx as usize]);
         *count += 1;
     }
 
@@ -294,7 +294,7 @@ fn generate_pawn_captures_promos(
     let mut bb = pawns;
     while bb != 0 {
         let sq_idx = bb.trailing_zeros() as i32;
-        let sq = Square::new(sq_idx as u8).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         bb &= bb - 1;
 
         let rank = sq_idx >> 3;
@@ -302,7 +302,7 @@ fn generate_pawn_captures_promos(
 
         let fwd_idx = sq_idx + dir;
         if is_promo_rank && fwd_idx >= 0 && fwd_idx < 64 && ((1u64 << fwd_idx) & occ) == 0 {
-            let fwd = Square::new(fwd_idx as u8).unwrap();
+            let fwd = SQUARES[fwd_idx as usize];
             for &p in &promo_pieces {
                 moves[*count] = Move::promotion(sq, fwd, p);
                 *count += 1;
@@ -315,7 +315,7 @@ fn generate_pawn_captures_promos(
         while caps != 0 {
             let cap_idx = caps.trailing_zeros() as u8;
             caps &= caps - 1;
-            let to = Square::new(cap_idx).unwrap();
+            let to = SQUARES[cap_idx as usize];
             if is_promo_rank {
                 for &p in &promo_pieces {
                     moves[*count] = Move::promotion(sq, to, p);
@@ -345,7 +345,7 @@ fn generate_knight_captures(
     let mut bb = knights;
     while bb != 0 {
         let sq_idx = bb.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         bb &= bb - 1;
         let attacks = crate::attack::knight_attacks(sq);
         let captures = attacks & them_bb;
@@ -353,7 +353,7 @@ fn generate_knight_captures(
         while c != 0 {
             let to_idx = c.trailing_zeros() as u8;
             c &= c - 1;
-            moves[*count] = Move::capture(sq, Square::new(to_idx).unwrap());
+            moves[*count] = Move::capture(sq, SQUARES[to_idx as usize]);
             *count += 1;
         }
     }
@@ -371,7 +371,7 @@ fn generate_sliding_captures(
     let mut diag = bishops | queens;
     while diag != 0 {
         let sq_idx = diag.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         diag &= diag - 1;
         let attacks = bishop_attacks(sq_idx, occ) & them_bb;
         push_slider_captures(sq, attacks, moves, count);
@@ -380,7 +380,7 @@ fn generate_sliding_captures(
     let mut ortho = rooks | queens;
     while ortho != 0 {
         let sq_idx = ortho.trailing_zeros() as u8;
-        let sq = Square::new(sq_idx).unwrap();
+        let sq = SQUARES[sq_idx as usize];
         ortho &= ortho - 1;
         let attacks = rook_attacks(sq_idx, occ) & them_bb;
         push_slider_captures(sq, attacks, moves, count);
@@ -393,7 +393,7 @@ fn push_slider_captures(from: Square, captures: u64, moves: &mut [Move; MAX_MOVE
     while bb != 0 {
         let lsb = bb.trailing_zeros() as u8;
         bb &= bb - 1;
-        moves[*count] = Move::capture(from, Square::new(lsb).unwrap());
+        moves[*count] = Move::capture(from, SQUARES[lsb as usize]);
         *count += 1;
     }
 }
@@ -411,7 +411,7 @@ fn generate_king_captures(
     while c != 0 {
         let to_idx = c.trailing_zeros() as u8;
         c &= c - 1;
-        moves[*count] = Move::capture(king_sq, Square::new(to_idx).unwrap());
+        moves[*count] = Move::capture(king_sq, SQUARES[to_idx as usize]);
         *count += 1;
     }
 }

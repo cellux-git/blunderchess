@@ -4,6 +4,16 @@ pub type Bitboard = u64;
 
 pub const MAX_DEPTH: u8 = 128;
 
+pub const SQUARES: [Square; 64] = {
+    let mut sqs = [Square::A1; 64];
+    let mut i = 0u8;
+    while i < 64 {
+        sqs[i as usize] = Square(i);
+        i += 1;
+    }
+    sqs
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Square(u8);
 
@@ -88,6 +98,7 @@ impl Color {
 //   bits 12-13: promo (2)  — 0=Queen, 1=Knight, 2=Bishop, 3=Rook
 //   bits 14-15: kind (2)   — 0=Normal, 1=Capture, 2=Castle, 3=Promotion
 // En passant is detected in make_move: pawn-capture to empty ep square.
+// Note: TT packed format (packed()/from_packed()) swaps these: kind at 12-13, promo at 15-16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move(u16);
 

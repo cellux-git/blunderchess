@@ -5,8 +5,11 @@ mod tests {
     use crate::search::mt::search;
     use crate::tt::TT;
     use crate::types::{Color, Square};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+    use crate::thread_pool::ThreadPool;
+    use crate::uci::Engine;
 
     fn make_tt() -> Arc<TT> { Arc::new(TT::new(16)) }
 
@@ -62,6 +65,142 @@ mod tests {
         let tt = make_tt();
         let result = search(&board, &params, &stop, &tt, None);
         assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn test_multi_threaded_stop_flag_halt_no_pool() {
+        crate::attack::init_slider_tables();
+        let board = Board::from_initial();
+        let mut params = SearchParams::with_depth(50);
+        params.threads = 4;
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+
+        let stop_clone = stop.clone();
+        let (tx, rx) = mpsc::channel::<()>();
+
+        let handle = std::thread::spawn(move || {
+            let result = search(&board, &params, &stop_clone, &tt, None);
+            tx.send(()).ok();
+            result
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        stop.store(true, Ordering::SeqCst);
+
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("search hung — did not stop within 10s after stop flag was set");
+
+        let result = handle.join().expect("search thread panicked");
+        assert!(result.best_move.is_some(),
+            "search should return a best move even when stopped");
+    }
+
+    #[test]
+    fn test_multi_threaded_stop_flag_halt_with_pool() {
+        crate::attack::init_slider_tables();
+        let board = Board::from_initial();
+        let mut params = SearchParams::with_depth(50);
+        params.threads = 4;
+        let stop = Arc::new(AtomicBool::new(false));
+        let tt = make_tt();
+        let pool = Arc::new(ThreadPool::new(4));
+
+        let stop_clone = stop.clone();
+        let pool_clone = pool.clone();
+        let (tx, rx) = mpsc::channel::<()>();
+
+        let handle = std::thread::spawn(move || {
+            let result = search(&board, &params, &stop_clone, &tt, Some(&*pool_clone));
+            tx.send(()).ok();
+            result
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        stop.store(true, Ordering::SeqCst);
+
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("search with pool hung — did not stop within 10s after stop flag was set");
+
+        let result = handle.join().expect("search thread panicked");
+        assert!(result.best_move.is_some(),
+            "search should return a best move even when stopped");
+    }
+
+    #[test]
+    fn test_full_uci_flow_with_4_threads() {
+        crate::attack::init_slider_tables();
+
+        let (tx, rx) = mpsc::channel::<()>();
+
+        std::thread::spawn(move || {
+            let mut engine = Engine::new();
+            engine.process_command("uci");
+            engine.process_command("isready");
+            engine.process_command("ucinewgame");
+            engine.process_command("setoption name Threads value 4");
+            engine.process_command("position startpos");
+
+            // Sync search with short movetime — process_command blocks
+            // until the search completes. If the barrier deadlocks, we
+            // never reach tx.send and the recv_timeout catches it.
+            engine.process_command("go movetime 500");
+            tx.send(()).ok();
+        });
+
+        rx.recv_timeout(Duration::from_secs(15))
+            .expect("engine hung during go with 4 threads");
+    }
+
+    #[test]
+    fn test_full_uci_time_control_with_4_threads() {
+        crate::attack::init_slider_tables();
+
+        let (tx, rx) = mpsc::channel::<()>();
+
+        std::thread::spawn(move || {
+            let mut engine = Engine::new();
+            engine.process_command("uci");
+            engine.process_command("isready");
+            engine.process_command("ucinewgame");
+            engine.process_command("setoption name Threads value 4");
+            engine.process_command("position startpos");
+
+            // Time-control syntax (what fastchess actually sends).
+            // 10s + 0.1s increment, 40 moves to go → movetime ~450ms.
+            engine.process_command("go wtime 10000 btime 10000 winc 100 binc 100 movestogo 40");
+            tx.send(()).ok();
+        });
+
+        rx.recv_timeout(Duration::from_secs(15))
+            .expect("engine hung during time-control go with 4 threads");
+    }
+
+    #[test]
+    fn test_go_infinite_stop_with_4_threads() {
+        crate::attack::init_slider_tables();
+
+        let (tx, rx) = mpsc::channel::<()>();
+
+        std::thread::spawn(move || {
+            let mut engine = Engine::new();
+            engine.process_command("uci");
+            engine.process_command("isready");
+            engine.process_command("ucinewgame");
+            engine.process_command("setoption name Threads value 4");
+            engine.process_command("position startpos");
+
+            // go infinite runs asynchronously — process_command returns immediately.
+            // Then we send stop after a short delay.
+            engine.process_command("go infinite");
+            std::thread::sleep(Duration::from_millis(100));
+            engine.process_command("stop");
+
+            tx.send(()).ok();
+        });
+
+        rx.recv_timeout(Duration::from_secs(15))
+            .expect("engine hung during go infinite + stop with 4 threads");
     }
 
     #[test]

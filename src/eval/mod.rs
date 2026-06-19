@@ -8,7 +8,9 @@ mod pieces;
 mod see;
 
 use crate::board::Board;
-use crate::types::{Color, Piece, Square};
+use crate::types::{Color, Piece};
+#[cfg(test)]
+use crate::types::Square;
 use std::sync::LazyLock;
 
 pub(crate) static EVAL: LazyLock<Eval> = LazyLock::new(Eval::default);
@@ -34,11 +36,12 @@ impl Eval {
         }
     }
 
-    fn pst_value(&self, mg_table: &[i32; 64], eg_table: &[i32; 64], sq: Square, color: Color) -> (i32, i32) {
+    #[inline]
+    fn pst_value_raw(&self, mg_table: &[i32; 64], eg_table: &[i32; 64], sq_idx: u8, color: Color) -> (i32, i32) {
         let idx = if color == Color::White {
-            sq.index() as usize
+            sq_idx as usize
         } else {
-            (sq.index() ^ 56) as usize
+            (sq_idx ^ 56) as usize
         };
         (mg_table[idx], eg_table[idx])
     }
@@ -103,29 +106,35 @@ impl Eval {
         let enemy_pawns_bb = board.pieces_bb(Piece::Pawn) & enemy_bb;
         let king_sq = board.king_square(color);
 
+        let our_pawns = board.pieces_bb(Piece::Pawn) & us_bb;
+        let our_knights = board.pieces_bb(Piece::Knight) & us_bb;
+        let our_bishops = board.pieces_bb(Piece::Bishop) & us_bb;
+        let our_rooks = board.pieces_bb(Piece::Rook) & us_bb;
+        let our_queens = board.pieces_bb(Piece::Queen) & us_bb;
+        let our_king = board.pieces_bb(Piece::King) & us_bb;
+
         macro_rules! accumulate {
-            ($piece:ident, $mg_table:ident, $eg_table:ident) => {
+            ($piece:ident, $mg_table:ident, $eg_table:ident, $bb:expr) => {
                 let val = self.material_value(Piece::$piece);
-                let mut bb = board.pieces_bb(Piece::$piece) & us_bb;
+                let mut bb = $bb;
                 let cnt = bb.count_ones() as i32;
                 mat_mg += val * cnt;
                 mat_eg += val * cnt;
                 while bb != 0 {
                     let idx = bb.trailing_zeros() as u8;
-                    let sq = Square::new(idx).unwrap();
-                    let (mg_pst, eg_pst) = self.pst_value(&self.pst.$mg_table, &self.pst.$eg_table, sq, color);
+                    let (mg_pst, eg_pst) = self.pst_value_raw(&self.pst.$mg_table, &self.pst.$eg_table, idx, color);
                     pos_mg += mg_pst;
                     pos_eg += eg_pst;
                     bb &= bb - 1;
                 }
             };
         }
-        accumulate!(Pawn, mg_pawn_table, eg_pawn_table);
-        accumulate!(Knight, mg_knight_table, eg_knight_table);
-        accumulate!(Bishop, mg_bishop_table, eg_bishop_table);
-        accumulate!(Rook, mg_rook_table, eg_rook_table);
-        accumulate!(Queen, mg_queen_table, eg_queen_table);
-        accumulate!(King, mg_king_table, eg_king_table);
+        accumulate!(Pawn, mg_pawn_table, eg_pawn_table, our_pawns);
+        accumulate!(Knight, mg_knight_table, eg_knight_table, our_knights);
+        accumulate!(Bishop, mg_bishop_table, eg_bishop_table, our_bishops);
+        accumulate!(Rook, mg_rook_table, eg_rook_table, our_rooks);
+        accumulate!(Queen, mg_queen_table, eg_queen_table, our_queens);
+        accumulate!(King, mg_king_table, eg_king_table, our_king);
 
         if color == Color::White {
             if board.castling_rights().has_wk() { pos_mg += self.king.castling_rights_kingside_bonus; }
@@ -138,25 +147,24 @@ impl Eval {
         let (m, e, my_passers) = pawns::eval_pawns(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        let bishops_bb = board.pieces_bb(Piece::Bishop) & us_bb;
-        if bishops_bb.count_ones() >= 2 {
+        if our_bishops.count_ones() >= 2 {
             pos_mg += self.piece.bishop_pair_bonus.0;
             pos_eg += self.piece.bishop_pair_bonus.1;
         }
 
-        let (m, e) = pieces::eval_bad_bishops(board, &self.piece, color, pawns_bb);
+        let (m, e) = pieces::eval_bad_bishops(board, &self.piece, color, pawns_bb, our_bishops);
         pos_mg += m; pos_eg += e;
 
-        let (m, e) = pieces::eval_rooks(board, &self.piece, pawns_bb, enemy_pawns_bb, color);
+        let (m, e) = pieces::eval_rooks(board, &self.piece, pawns_bb, enemy_pawns_bb, color, our_rooks);
         pos_mg += m; pos_eg += e;
 
-        let (m, e) = pieces::eval_rook_queen_battery(board, &self.piece, color);
+        let (m, e) = pieces::eval_rook_queen_battery(board, &self.piece, color, our_rooks, our_queens);
         pos_mg += m; pos_eg += e;
 
-        let (m, e) = pieces::eval_knights(board, &self.piece, color, enemy_pawns_bb);
+        let (m, e) = pieces::eval_knights(board, &self.piece, color, enemy_pawns_bb, our_knights);
         pos_mg += m; pos_eg += e;
 
-        let (m, e) = pieces::eval_queen_multiattack(board, &self.piece, color, enemy);
+        let (m, e) = pieces::eval_queen_multiattack(board, &self.piece, color, enemy, our_queens);
         pos_mg += m; pos_eg += e;
 
         let (m, e) = pawns::eval_connected_passers(&self.king, my_passers);
@@ -172,7 +180,7 @@ impl Eval {
         let (m, e) = pawns::eval_passer_blocker(board, &self.pawn, pawns_bb, enemy_pawns_bb, color);
         pos_mg += m; pos_eg += e;
 
-        let (mobility_mg, mobility_eg) = mobility::eval_mobility(board, &self.mobility, color, enemy_pawn_attacks);
+        let (mobility_mg, mobility_eg) = mobility::eval_mobility(board, &self.mobility, color, enemy_pawn_attacks, our_knights, our_bishops, our_rooks, our_queens);
         pos_mg += mobility_mg;
         pos_eg += mobility_eg;
 
@@ -350,6 +358,35 @@ mod tests {
         let e8 = Square::from_file_rank(4, 7).unwrap();
         let mv = Move::capture(e1, e8);
         assert_eq!(Eval::default().see(&board, mv), 0);
+    }
+
+    #[test]
+    fn test_see_en_passant_winning() {
+        crate::attack::init_slider_tables();
+        let fen = "8/8/8/3pP3/8/8/8/8 w - d6 0 1";
+        let board = Board::from_fen(fen).unwrap();
+        let e5 = Square::from_file_rank(4, 4).unwrap();
+        let d6 = Square::from_file_rank(3, 5).unwrap();
+        let mv = Move::ep(e5, d6);
+        // Captures a pawn worth 100, base_gain should be 100
+        assert_eq!(Eval::default().see(&board, mv), 100,
+            "en passant should see +100 (pawn win)");
+    }
+
+    #[test]
+    fn test_see_en_passant_defended() {
+        crate::attack::init_slider_tables();
+        // Black just played f7-f5, en passant square is f6.
+        // White pawn on e5 can ep-capture, but black bishop on g7 recaptures.
+        // Net: pawn for pawn = 0 (even exchange).
+        let fen = "8/6b1/8/4Pp2/8/8/8/8 w - f6 0 1";
+        let board = Board::from_fen(fen).unwrap();
+        let e5 = Square::from_file_rank(4, 4).unwrap();
+        let f6 = Square::from_file_rank(5, 5).unwrap();
+        let mv = Move::ep(e5, f6);
+        let see_val = Eval::default().see(&board, mv);
+        assert_eq!(see_val, 0,
+            "en passant with bishop defender should be even exchange, got {see_val}");
     }
 
     // ── 26 positional term tests ──

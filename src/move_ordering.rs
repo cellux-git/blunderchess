@@ -57,7 +57,7 @@ impl MoveOrdering {
         sort_by_score_desc(moves, &mut scores);
     }
 
-    pub(crate) fn order_moves_q(&self, moves: &mut [Move], board: &mut Board, eval: &Eval) {
+    pub(crate) fn order_moves_q(&self, moves: &mut [Move], board: &Board, eval: &Eval) {
         let mut scores: [i32; MAX_MOVES] = [0; MAX_MOVES];
         for i in 0..moves.len() {
             let mv = moves[i];
@@ -67,10 +67,7 @@ impl MoveOrdering {
             } else if mv.kind() == MoveKind::Promotion {
                 30_000
             } else {
-                let undo = board.make_move(mv);
-                let gives_check = board.in_check() as i32;
-                board.unmake_move(&undo);
-                if gives_check > 0 { 5_000 } else { 0 }
+                0
             };
         }
         sort_by_score_desc(moves, &mut scores);

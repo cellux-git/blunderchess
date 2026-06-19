@@ -42,10 +42,11 @@ pub(crate) fn alpha_beta(
 
     if let Some(ref entry) = tt_entry {
         if !is_pv && entry.depth >= depth {
+            let s = tt_score.unwrap();
             match entry.node_type {
-                NodeType::Exact => return tt_score.unwrap(),
-                NodeType::LowerBound => { if tt_score.unwrap() >= beta { return tt_score.unwrap(); } }
-                NodeType::UpperBound => { if tt_score.unwrap() <= alpha { return tt_score.unwrap(); } }
+                NodeType::Exact => return s,
+                NodeType::LowerBound => { if s >= beta { return s; } }
+                NodeType::UpperBound => { if s <= alpha { return s; } }
             }
         }
     }
@@ -63,12 +64,12 @@ pub(crate) fn alpha_beta(
     let in_check = board.in_check();
 
     let can_null_move = !is_pv && depth >= alg.null_move.min_depth && ply > 0 && !in_check;
-    let non_pawn_king = board.occupancy()
-        & !board.pieces_bb(Piece::Pawn)
-        & !board.pieces_bb(Piece::King);
-    let has_big_pieces = non_pawn_king != 0;
 
-    if can_null_move && has_big_pieces {
+    if can_null_move {
+        let non_pawn_king = board.occupancy()
+            & !board.pieces_bb(Piece::Pawn)
+            & !board.pieces_bb(Piece::King);
+        if non_pawn_king != 0 {
         let r = if depth >= alg.null_move.deep_threshold { alg.null_move.r_deep } else { alg.null_move.r_shallow };
         let null_depth = if depth > r { depth - r } else { 0 };
         if null_depth > 0 {
@@ -76,6 +77,7 @@ pub(crate) fn alpha_beta(
             let null_score = -alpha_beta(board, -beta, -beta + 1, null_depth, ply + 1, state, tt, false, thread_id, alg, eval);
             board.unmake_null_move(&undo_null);
             if null_score >= beta { return null_score; }
+        }
         }
     }
 
@@ -108,8 +110,12 @@ pub(crate) fn alpha_beta(
 
         let mv = moves[i];
 
-        if ply == 0 && state.excluded_moves.contains(&mv) {
-            continue;
+        if ply == 0 {
+            let mut skip = false;
+            for ei in 0..state.excluded_count as usize {
+                if state.excluded_moves[ei] == mv { skip = true; break; }
+            }
+            if skip { continue; }
         }
 
         let from = mv.from();

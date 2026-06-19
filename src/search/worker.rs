@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::Instant;
 
+pub(crate) const MAX_EXCLUDED: usize = 8;
+
 pub(crate) struct SearchState {
     pub nodes: u64,
     pub pv: [[Option<Move>; MAX_DEPTH as usize]; MAX_DEPTH as usize],
@@ -19,12 +21,13 @@ pub(crate) struct SearchState {
     pub movetime: Option<u64>,
     pub soft_time: Option<u64>,
     pub move_ordering: MoveOrdering,
-    pub excluded_moves: Vec<Move>,
+    pub excluded_moves: [Move; MAX_EXCLUDED],
+    pub excluded_count: u8,
 }
 
 impl SearchState {
     pub fn should_stop(&self) -> bool {
-        if unsafe { &*self.stop }.load(AtomicOrdering::Relaxed) { return true; }
+        if unsafe { &*self.stop }.load(AtomicOrdering::Acquire) { return true; }
         if self.nodes & 1023 == 0 {
             if let Some(limit) = self.movetime {
                 if self.start_time.elapsed().as_millis() as u64 >= limit { return true; }
@@ -67,7 +70,8 @@ pub(crate) fn search_worker(
         movetime: params.movetime,
         soft_time: params.movetime.map(|t| t / alg.soft_time_divisor),
         move_ordering: MoveOrdering::new(),
-        excluded_moves: Vec::new(),
+        excluded_moves: [Move::NULL; MAX_EXCLUDED],
+        excluded_count: 0,
     };
 
     let multi_pv = params.multi_pv.max(1) as usize;
@@ -75,14 +79,16 @@ pub(crate) fn search_worker(
     let mut delta = alg.aspiration.initial_delta;
 
     for depth in 1..=max_depth {
-        let mut excluded_moves: Vec<Move> = Vec::new();
+        let mut excluded_moves: [Move; MAX_EXCLUDED] = [Move::NULL; MAX_EXCLUDED];
+        let mut excluded_count: u8 = 0;
         let mut depth_results: Vec<(Move, i32, Vec<Move>)> = Vec::new();
 
         for mpv_idx in 0..multi_pv {
             if state.should_stop() { break; }
 
             state.pv_length = [0; MAX_DEPTH as usize];
-            state.excluded_moves = excluded_moves.clone();
+            state.excluded_moves = excluded_moves;
+            state.excluded_count = excluded_count;
 
             let mut alpha = -(CHECKMATE + 100);
             let mut beta = CHECKMATE + 100;
@@ -116,7 +122,10 @@ pub(crate) fn search_worker(
             let pv_moves: Vec<Move> = (0..state.pv_length[0]).filter_map(|i| state.pv[0][i]).collect();
 
             if let Some(best) = pv_moves.first().copied() {
-                excluded_moves.push(best);
+                if (excluded_count as usize) < MAX_EXCLUDED {
+                    excluded_moves[excluded_count as usize] = best;
+                    excluded_count += 1;
+                }
                 depth_results.push((best, score, pv_moves));
             } else if depth_results.is_empty() {
                 depth_results.push((Move::NULL, score, Vec::new()));
