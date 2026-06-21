@@ -203,3 +203,7 @@ New optimization techniques should be:
 - Incremental cached bitboards (pinned, phase) add state to `Board` and complexity to `make_move`/`unmake_move`; any bug here silently corrupts search results. (See "Conditional pinned-piece recomputation" above — a conditional pin update caused illegal PV moves.)
 - QS TT store throttling (Exact/LowerBound only) is a tradeoff — UpperBound entries in QS could improve accuracy but increase contention.
 - The fixed-size history array (`[u64; 100]`) caps the game length at 100 half-moves for repetition detection; this matches the 50-move rule and is sufficient for all practical use. If exceeded, history silently wraps, which is safe (older positions can't cause a threefold repetition with the current position).
+
+### Code cleanup (2026-06-21)
+
+Dead-code and deduplication pass. The only change touching a hot-path function was removing a vestigial `#[allow(unused_assignments)]` from `compute_pinned_impl` — the compiler reported zero warnings after removal, confirming no actual unused assignment exists. All other changes are off the hot path (dead setters, unused methods, duplicate functions, static-init PRNG, `#[cfg(test)]` gating of test-only accessors). Benchmarks confirm identical node counts and NPS within noise of the pre-cleanup baseline. If a performance regression is observed, verify with `cargo test --release --test benchmarks -- --ignored --nocapture` and report. 

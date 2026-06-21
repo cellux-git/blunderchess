@@ -188,7 +188,7 @@ fn init_slider_tables_inner() -> AttackTables {
 }
 
 fn rng_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+    *state = crate::types::lcg_step(*state);
     *state
 }
 

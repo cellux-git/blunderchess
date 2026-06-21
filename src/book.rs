@@ -21,10 +21,6 @@ impl Book {
         Ok(Book { entries: data })
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn entry_count(&self) -> usize {
         self.entries.len() / 16
     }

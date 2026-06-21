@@ -5,10 +5,6 @@ pub fn is_draw_by_rule(board: &Board) -> bool {
     is_insufficient_material(board) || is_fifty_move(board) || is_threefold(board)
 }
 
-pub fn is_terminal_draw(board: &Board) -> bool {
-    is_fifty_move(board) || is_threefold(board) || is_insufficient_material(board)
-}
-
 pub fn is_fifty_move(board: &Board) -> bool {
     board.halfmove_clock() >= 100
 }

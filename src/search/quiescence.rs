@@ -31,7 +31,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
         }
     }
 
-    if draw::is_terminal_draw(board) { return 0; }
+    if draw::is_draw_by_rule(board) { return 0; }
 
     let stand_pat = eval.evaluate(board);
     let in_check = board.in_check();

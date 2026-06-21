@@ -51,7 +51,7 @@ pub(crate) fn alpha_beta(
         }
     }
 
-    if draw::is_terminal_draw(board) { return 0; }
+    if draw::is_draw_by_rule(board) { return 0; }
 
     let mut hash_move = tt_entry.and_then(|e| e.best_move);
 

@@ -11,19 +11,15 @@ const TOTAL_KEYS: usize =
 
 const ZOBRIST_KEYS: [u64; TOTAL_KEYS] = {
     let mut keys = [0u64; TOTAL_KEYS];
-    let mut seed: u64 = 0xDEAD_BEEF_CAFE_BABE;
+    let mut state: u64 = 0xDEAD_BEEF_CAFE_BABE;
     let mut i = 0;
     while i < TOTAL_KEYS {
-        seed = lcg_next(seed);
-        keys[i] = seed;
+        state = crate::types::lcg_step(state);
+        keys[i] = state;
         i += 1;
     }
     keys
 };
-
-const fn lcg_next(state: u64) -> u64 {
-    state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407)
-}
 
 const fn piece_square_index(color: Color, piece: Piece, square: Square) -> usize {
     color as usize * PIECE_COUNT * SQUARE_COUNT

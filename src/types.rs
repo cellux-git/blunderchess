@@ -14,6 +14,10 @@ pub const SQUARES: [Square; 64] = {
     sqs
 };
 
+pub(crate) const fn lcg_step(state: u64) -> u64 {
+    state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Square(u8);
 

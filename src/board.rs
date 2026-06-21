@@ -342,14 +342,15 @@ pub struct Board {
 }
 
 impl Board {
-    pub fn squares(&self) -> &[Option<Piece>; 64] { &self.squares }
-    pub fn colors(&self) -> &[Option<Color>; 64] { &self.colors }
+    #[cfg(test)]
+    pub(crate) fn squares(&self) -> &[Option<Piece>; 64] { &self.squares }
+    #[cfg(test)]
+    pub(crate) fn colors(&self) -> &[Option<Color>; 64] { &self.colors }
 
     pub fn pieces_bb(&self, piece: Piece) -> Bitboard { self.pieces_bb[piece as usize] }
     pub fn colors_bb(&self, color: Color) -> Bitboard { self.colors_bb[color.index()] }
     pub fn occupancy(&self) -> Bitboard { self.occupancy }
     pub fn side_to_move(&self) -> Color { self.side_to_move }
-    pub fn set_side_to_move(&mut self, stm: Color) { self.side_to_move = stm; }
     pub fn castling_rights(&self) -> CastlingRights { self.castling_rights }
     pub fn en_passant(&self) -> Option<Square> { self.en_passant }
     pub fn halfmove_clock(&self) -> u8 { self.halfmove_clock }
@@ -366,7 +367,7 @@ impl Board {
         }
     }
 
-    pub fn new() -> Board {
+    fn new() -> Board {
         Board {
             squares: [None; 64], colors: [None; 64],
             pieces_bb: [0; 6], colors_bb: [0; 2], occupancy: 0,
@@ -554,7 +555,6 @@ impl Board {
 
     /// Bitboard of pieces pinned to the given king.
     /// A piece is pinned if it stands between its king and an enemy slider (rook/bishop/queen).
-    #[allow(unused_assignments)]
     fn compute_pinned_impl(&self, king_color: Color) -> Bitboard {
         let king_sq = self.king_square[king_color.index()];
         let friend = self.colors_bb[king_color.index()];
@@ -854,19 +854,7 @@ impl Board {
     pub fn check_result(&self) -> Option<GameResult> {
         let mut moves_buf = [Move::NULL; MAX_MOVES];
         let count = crate::movegen::generate_legal_moves(self, &mut moves_buf);
-        let side = self.side_to_move;
-        let mut legal = 0;
-        let mut b = self.clone();
-        for i in 0..count {
-            let mv = moves_buf[i];
-            let undo = b.make_move(mv);
-            let king = b.king_square[side.index()];
-            if !b.is_attacked_by(king, side.flip()) {
-                legal += 1;
-            }
-            b.unmake_move(&undo);
-        }
-        if legal == 0 {
+        if count == 0 {
             if self.in_check() {
                 Some(GameResult::Checkmate(self.side_to_move.flip()))
             } else {
