@@ -75,6 +75,20 @@ Optimization efforts target three layers:
 | 18 | Const `SQUARES: [Square; 64]` lookup table | `types.rs`, `movegen.rs` | ~1-2% at d7-8, +11% perft | neutral |
 | 19 | `excluded_moves` Vec → fixed `[Move; 8]` array | `worker.rs`, `alpha_beta.rs` | noise | noise |
 
+### Accepted optimizations (2026-06-21 session)
+
+| # | Optimization | Files | Single-thread Δ | Multi-thread Δ |
+|---|-------------|-------|-----------------|----------------|
+| 20 | Skip `eval.evaluate()` when in check | `alpha_beta.rs`, `quiescence.rs` | noise | noise |
+| 21 | Compute `mv.kind()` once per move in alpha_beta loop | `alpha_beta.rs` | noise | noise |
+| 22 | Compute `board.in_check()` once after make_move | `alpha_beta.rs` | ~+4% at d8 | ~same |
+| 23 | Eliminate double SEE computation in QS (cache during filter, reuse in ordering) | `quiescence.rs`, `move_ordering.rs` | noise | noise |
+| 24 | `SHIELD_OFFSETS` as `const` instead of per-call stack allocation | `kings.rs` | noise | noise |
+| 25 | XOR instead of AND-NOT+OR in `move_piece` | `board.rs` | noise | noise |
+| 26 | Eliminate dead `if`/`else` branch in `eval_rook_behind_passer` | `pawns.rs` | noise | noise |
+| 27 | Remove dead `_sq` from `eval_bad_bishops`, `QUEENSIDE_MASK`/`KINGSIDE_MASK` as `const` | `pieces.rs` | noise | noise |
+| 28 | Remove duplicate `our_pawns` = `pawns_bb` recomputation | `eval/mod.rs` | noise | noise |
+
 ### Current performance baseline
 
 See `CONTEXT.md` for full benchmark tables. Summary (2026-06-19, after optimizations 16-19 + pin-recomputation refinement):
@@ -148,7 +162,19 @@ See `CONTEXT.md` for full benchmark tables. Summary (2026-06-19, after optimizat
 
 **Result**: Not implemented. Mobility requires `occ` for slider attack computation, which differs from PST (just board positions). The two passes have different data dependencies and merging would complicate both. Skipped as high-effort, unclear benefit.
 
-### Conditional pinned-piece recomputation (2026-06-19)
+### Staged move generation with deferred quiet scoring (2026-06-21)
+
+**Expected**: Defer quiet move history scoring to Phase 2 (after captures/promotions/killers), avoiding history lookups in cutoff nodes. Staged: Phase 1 scores captures with SEE, quiets get placeholder; Phase 2 scores quiets with history only if no cutoff occurred.
+
+**Result**: Node count at depth 8 increased from 595K to 768K (+29%). The placeholder scores (-1) caused losing captures (2,000 + negative SEE) to sort before beneficial history quiets, degrading move ordering. The deferred history computation savings were negligible (~25 array accesses per node) compared to the ordering penalty.
+
+**Why rejected**: The ordering penalty dominates. History scoring is cheap (one `history[from][to]` lookup per quiet). The correct ordering of history quiets before losing captures is worth far more than the deferred computation saves. Full staged generation (with separate `generate_quiets` function) would avoid this ordering issue but requires significant refactoring for correctness.
+
+### ADR-2 / ADR-3 skip analysis (2026-06-21)
+
+**ADR-2 (Pin recomputation via ray tables)**: Analyzed, not implemented. The current while-loop in `compute_pinned_impl` (per-direction stepping with bounds checks) is already efficient for typical king positions (1-7 steps per direction). Replacing with precomputed `RAYS[64][8]` (4KB lookup table) plus directional bitscan logic adds table pressure and complexity without clear benefit. Skipped.
+
+**ADR-3 (gives_check via bitboard)**: Analyzed, not implemented. The `make_move`/`unmake_move` cycle in QS filtering is only used for non-trivially-legal moves (pinned pieces, kings, EP, castling) — a small fraction of QS moves. Replacing with pure bitboard check detection would require handling direct checks, discovered checks, and nuanced EP/castling legality — high complexity for marginal benefit. Skipped.
 
 **Original approach**: Only recompute `pinned[color]` in `make_move` when the moved piece is the king or was previously pinned (`if piece == Piece::King || (from.bit() & self.pinned[color]) != 0`). Avoids O(8-ray) recomputation on every move.
 
@@ -193,9 +219,14 @@ New optimization techniques should be:
 
 | # | Opportunity | File | Likely gain | Risk |
 |---|------------|------|-------------|------|
-| 1 | Staged move generation (captures first, quiets only if no cutoff) | `alpha_beta.rs` | MEDIUM | MEDIUM — complex search refactor |
-| 2 | Pin recomputation via directional shifts or ray tables | `board.rs` | LOW | MEDIUM — pin computation bugs cause illegal moves |
-| 3 | `order_moves_q` gives_check via bitboard without make/unmake | `move_ordering.rs` | LOW-MED | MEDIUM — discovered-check detection is non-trivial |
+| 1 | Full staged move generation (separate `generate_quiets` + two-phase search) | `alpha_beta.rs`, `movegen.rs` | HIGH | HIGH — significant refactor, needs `generate_quiets` function |
+| 2 | SEE incremental x-ray updates (avoid recomputing all attackers each recursion) | `eval/see.rs`, `attack.rs` | HIGH | MEDIUM — complex SEE refactor |
+
+> **Note (2026-06-21)**: All three original ADR-0011 remaining candidates were evaluated:
+> - ADR-1 (staged generation): attempted with deferred quiet scoring — reverted (ordering penalty). Full staged generation with separate `generate_quiets` remains viable but higher-effort.
+> - ADR-2 (pin ray tables): analyzed, skipped — insufficient benefit.
+> - ADR-3 (bitboard gives_check): analyzed, skipped — too complex for the subset of moves it affects.
+> Two new candidates added from the 2026-06-21 sweep.
 
 ## Consequences
 

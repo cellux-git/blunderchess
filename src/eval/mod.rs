@@ -106,7 +106,7 @@ impl Eval {
         let enemy_pawns_bb = board.pieces_bb(Piece::Pawn) & enemy_bb;
         let king_sq = board.king_square(color);
 
-        let our_pawns = board.pieces_bb(Piece::Pawn) & us_bb;
+        let our_pawns = pawns_bb;
         let our_knights = board.pieces_bb(Piece::Knight) & us_bb;
         let our_bishops = board.pieces_bb(Piece::Bishop) & us_bb;
         let our_rooks = board.pieces_bb(Piece::Rook) & us_bb;

@@ -9,13 +9,14 @@ pub(crate) fn eval_king_safety(board: &Board, king: &KingEval, color: Color, kin
     let kf = king_sq.file();
     let kr = king_sq.rank();
 
-    let shield_offsets: [(i32, i32); 6] = if color == Color::White {
-        [(0, 1), (1, 1), (-1, 1), (0, 2), (1, 2), (-1, 2)]
-    } else {
-        [(0, -1), (1, -1), (-1, -1), (0, -2), (1, -2), (-1, -2)]
-    };
+    const SHIELD_OFFSETS: [[(i32, i32); 6]; 2] = [
+        [(0, 1), (1, 1), (-1, 1), (0, 2), (1, 2), (-1, 2)],
+        [(0, -1), (1, -1), (-1, -1), (0, -2), (1, -2), (-1, -2)],
+    ];
 
-    for &(df, dr) in &shield_offsets {
+    let shield_offsets = &SHIELD_OFFSETS[color.index()];
+
+    for &(df, dr) in shield_offsets {
         let ff = kf as i32 + df;
         let rr = kr as i32 + dr;
         if ff >= 0 && ff < 8 && rr >= 0 && rr < 8 {

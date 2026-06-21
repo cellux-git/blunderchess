@@ -481,9 +481,9 @@ impl Board {
         self.colors[ti] = Some(color);
         let from_bit = from.bit();
         let to_bit = to.bit();
-        self.pieces_bb[piece as usize] = (self.pieces_bb[piece as usize] & !from_bit) | to_bit;
-        self.colors_bb[color.index()] = (self.colors_bb[color.index()] & !from_bit) | to_bit;
-        self.occupancy = (self.occupancy & !from_bit) | to_bit;
+        self.pieces_bb[piece as usize] ^= from_bit | to_bit;
+        self.colors_bb[color.index()] ^= from_bit | to_bit;
+        self.occupancy ^= from_bit | to_bit;
     }
 
     #[inline]

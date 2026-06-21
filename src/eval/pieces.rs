@@ -45,7 +45,6 @@ pub(crate) fn eval_bad_bishops(board: &Board, piece: &PieceEval, color: Color, p
     let mut bishops = my_bishops;
     while bishops != 0 {
         let sq_idx = bishops.trailing_zeros() as u8;
-        let _sq = Square::new(sq_idx).unwrap();
         bishops &= bishops - 1;
 
         let sq_color = ((sq_idx & 7) + (sq_idx >> 3)) & 1;
@@ -330,13 +329,13 @@ pub(crate) fn eval_space(pawn: &PawnEval, pawns_bb: u64, color: Color) -> (i32, 
 }
 
 pub(crate) fn eval_pawn_majority(pawn: &PawnEval, pawns_bb: u64, enemy_pawns_bb: u64) -> (i32, i32) {
-    let queenside_mask: u64 = file_mask(0) | file_mask(1) | file_mask(2) | file_mask(3);
-    let kingside_mask: u64 = file_mask(4) | file_mask(5) | file_mask(6) | file_mask(7);
+    const QUEENSIDE_MASK: u64 = 0x0F0F0F0F0F0F0F0F;
+    const KINGSIDE_MASK: u64 = 0xF0F0F0F0F0F0F0F0;
 
-    let own_qs = (pawns_bb & queenside_mask).count_ones() as i32;
-    let own_ks = (pawns_bb & kingside_mask).count_ones() as i32;
-    let enemy_qs = (enemy_pawns_bb & queenside_mask).count_ones() as i32;
-    let enemy_ks = (enemy_pawns_bb & kingside_mask).count_ones() as i32;
+    let own_qs = (pawns_bb & QUEENSIDE_MASK).count_ones() as i32;
+    let own_ks = (pawns_bb & KINGSIDE_MASK).count_ones() as i32;
+    let enemy_qs = (enemy_pawns_bb & QUEENSIDE_MASK).count_ones() as i32;
+    let enemy_ks = (enemy_pawns_bb & KINGSIDE_MASK).count_ones() as i32;
 
     let mut mg = 0i32;
     let mut eg = 0i32;

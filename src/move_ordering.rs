@@ -57,12 +57,13 @@ impl MoveOrdering {
         sort_by_score_desc(moves, &mut scores);
     }
 
-    pub(crate) fn order_moves_q(&self, moves: &mut [Move], board: &Board, eval: &Eval) {
+
+    pub(crate) fn order_moves_q(&self, moves: &mut [Move], see_scores: &[i32]) {
         let mut scores: [i32; MAX_MOVES] = [0; MAX_MOVES];
         for i in 0..moves.len() {
             let mv = moves[i];
             scores[i] = if mv.kind() == MoveKind::Capture {
-                let see_val = eval.see(board, mv);
+                let see_val = see_scores[i];
                 if see_val > 0 { 10_000 + see_val } else { 2_000 + see_val }
             } else if mv.kind() == MoveKind::Promotion {
                 30_000

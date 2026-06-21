@@ -81,7 +81,7 @@ pub(crate) fn alpha_beta(
         }
     }
 
-    let static_eval = if depth <= alg.futility.max_depth { Some(eval.evaluate(board)) } else { None };
+    let static_eval = if depth <= alg.futility.max_depth && !in_check { Some(eval.evaluate(board)) } else { None };
 
     // Razor pruning: at depth 1, if eval is far below alpha, skip to QS
     if depth == 1 && !is_pv && !in_check {
@@ -109,6 +109,7 @@ pub(crate) fn alpha_beta(
         if state.should_stop() { break; }
 
         let mv = moves[i];
+        let mv_kind = mv.kind();
 
         if ply == 0 {
             let mut skip = false;
@@ -122,11 +123,11 @@ pub(crate) fn alpha_beta(
 
         let is_trivially_legal = !in_check && {
             if let Some(piece) = board.piece_at(from) {
-                let is_ep = mv.kind() == MoveKind::Capture
+                let is_ep = mv_kind == MoveKind::Capture
                     && board.en_passant() == Some(mv.to());
                 piece != Piece::King
                     && !is_ep
-                    && mv.kind() != MoveKind::Castle
+                    && mv_kind != MoveKind::Castle
                     && (from.bit() & pinned) == 0
             } else {
                 false
@@ -135,6 +136,7 @@ pub(crate) fn alpha_beta(
 
         let undo = board.make_move(mv);
         tt.prefetch(board.hash());
+        let post_check = board.in_check();
 
         if !is_trivially_legal {
             let king_sq = board.king_square(side);
@@ -147,9 +149,8 @@ pub(crate) fn alpha_beta(
         // Futility pruning
         if let Some(se) = static_eval {
             if depth <= alg.futility.max_depth {
-                let mv_kind = mv.kind();
                 let is_quiet = mv_kind != MoveKind::Capture && mv_kind != MoveKind::Promotion;
-                if is_quiet && !board.in_check() {
+                if is_quiet && !post_check {
                     let margin: i32 = if depth == 2 { alg.futility.margin_d2 } else { alg.futility.margin_d1 };
                     if se + margin <= alpha {
                         board.unmake_move(&undo);
@@ -164,11 +165,10 @@ pub(crate) fn alpha_beta(
             score = -alpha_beta(board, -beta, -alpha, depth - 1, ply + 1, state, tt, is_pv, thread_id, alg, eval);
         } else {
             score = alpha + 1;
-            let mv_kind = mv.kind();
             let is_quiet = mv_kind != MoveKind::Capture && mv_kind != MoveKind::Promotion;
             if depth >= alg.lmr.min_depth && moves_searched >= alg.lmr.min_moves_searched as u32 && is_quiet {
                 let is_killer = state.move_ordering.is_killer(mv, ply);
-                let gives_check = board.in_check();
+                let gives_check = post_check;
                 if !is_killer && !gives_check {
                     let base_r: u8 = if moves_searched >= 8 { alg.lmr.reduction[2] } else if moves_searched >= 5 { alg.lmr.reduction[1] } else { alg.lmr.reduction[0] };
                     let hist = state.move_ordering.history_score(mv);
@@ -204,8 +204,7 @@ pub(crate) fn alpha_beta(
                 if score >= beta {
                     node_type = NodeType::LowerBound;
 
-                    let k = mv.kind();
-                    if k != MoveKind::Capture && k != MoveKind::Promotion {
+                    if mv_kind != MoveKind::Capture && mv_kind != MoveKind::Promotion {
                         state.move_ordering.record_beta_cutoff(mv, depth, ply);
                     }
 

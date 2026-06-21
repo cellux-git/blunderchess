@@ -33,8 +33,8 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
     if draw::is_draw_by_rule(board) { return 0; }
 
-    let stand_pat = eval.evaluate(board);
     let in_check = board.in_check();
+    let stand_pat = if !in_check { eval.evaluate(board) } else { 0 };
     if !in_check {
         if stand_pat >= beta {
             tt.store(hash, beta, 0, NodeType::LowerBound, None);
@@ -57,6 +57,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
     let side = board.side_to_move();
     let pinned = board.pinned_pieces(side);
     let mut filtered = 0;
+    let mut filtered_see: [i32; MAX_MOVES] = [0; MAX_MOVES];
 
     for i in 0..pseudo_count {
         let mv = moves_buf[i];
@@ -64,9 +65,10 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
         let is_cap_or_promo = k == MoveKind::Capture || k == MoveKind::Promotion;
         if !is_cap_or_promo && qs_depth > 0 && !in_check { continue; }
 
-        // SEE pruning: skip losing captures in quiescence
-        if qs_depth > 0 && !in_check && k == MoveKind::Capture {
-            if eval.see(board, mv) < 0 { continue; }
+        let mut see_val: i32 = 0;
+        if k == MoveKind::Capture {
+            see_val = eval.see(board, mv);
+            if qs_depth > 0 && !in_check && see_val < 0 { continue; }
         }
 
         let from = mv.from();
@@ -80,6 +82,7 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
 
         if is_trivially_legal {
             moves_buf[filtered] = mv;
+            filtered_see[filtered] = see_val;
             filtered += 1;
         } else {
             let undo = board.make_move(mv);
@@ -89,17 +92,18 @@ pub(crate) fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u8, 
             board.unmake_move(&undo);
             if own_king_safe && (is_cap_or_promo || gives_check || in_check) {
                 moves_buf[filtered] = mv;
+                filtered_see[filtered] = see_val;
                 filtered += 1;
             }
         }
     }
 
     if filtered == 0 {
-        let score = if board.in_check() { -(CHECKMATE - ply as i32) } else { alpha };
+        let score = if in_check { -(CHECKMATE - ply as i32) } else { alpha };
         tt.store(hash, score, 0, NodeType::Exact, None);
         return score;
     }
-    state.move_ordering.order_moves_q(&mut moves_buf[..filtered], board, eval);
+    state.move_ordering.order_moves_q(&mut moves_buf[..filtered], &filtered_see[..filtered]);
 
     let mut best_score = -(CHECKMATE + 200);
     let mut node_type = NodeType::UpperBound;

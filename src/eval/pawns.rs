@@ -125,11 +125,7 @@ pub(crate) fn eval_rook_behind_passer(board: &Board, king: &KingEval, color: Col
         let passer_rank = passer_sq.rank();
 
         let is_mine = (my_rooks >> sq_idx) & 1 != 0;
-        let behind = if is_mine {
-            if color == Color::White { rook_rank < passer_rank } else { rook_rank > passer_rank }
-        } else {
-            if color == Color::White { rook_rank < passer_rank } else { rook_rank > passer_rank }
-        };
+        let behind = if color == Color::White { rook_rank < passer_rank } else { rook_rank > passer_rank };
 
         if behind {
             if is_mine {
